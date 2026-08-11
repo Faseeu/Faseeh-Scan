@@ -156,8 +156,9 @@ PDF JavaScript, embedded file launching, remote URL fetching, and form submissio
 ## 9. Import and parser isolation
 
 - Check file signatures and parse with bounded size/page/pixel limits.
-- Treat archives and DICOM directories as decompression-bomb risks.
-- Run OCR/PDF/image processors out-of-process with no Drive token, vault key, home-directory access, or network access.
+- Disable optical-media autorun and never execute bundled DICOM viewers, scripts, or DICOM files from imported media.
+- Treat archives and DICOM directories as decompression-bomb risks; validate or clear unknown DICOM preambles only in a derived working copy while preserving the encrypted original.
+- Run OCR/PDF/image/DICOM processors out-of-process with no Drive token, vault key, home-directory access, or network access.
 - Apply CPU, memory, file-count, and wall-time limits.
 - Pin and promptly update Ghostscript, Tesseract, image codecs, and PDF components.
 - Preserve the original bytes even when an OCR/PDF-A derivative is generated.

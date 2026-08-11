@@ -26,6 +26,7 @@ The recommended implementation is a Tauri desktop app with a Rust security/stora
 ## Planning documents
 
 - [Product and delivery plan](docs/PROJECT_PLAN.md)
+- [Medical imaging, CDs, DICOM, and 3D-data strategy](docs/MEDICAL_IMAGING_STRATEGY.md)
 - [Security architecture and threat model](docs/SECURITY_ARCHITECTURE.md)
 - [Open-source projects to adopt, evaluate, or study](docs/OPEN_SOURCE_LANDSCAPE.md)
 
@@ -37,7 +38,7 @@ The first engineering milestone is one end-to-end synthetic-data path:
 import → encrypt locally → upload ciphertext → remove local state → restore → verify
 ```
 
-Implementation should not expand into AI, live EHR sync, sharing, or DICOM until that recovery path is reliable and reviewed.
+Implementation should not expand into AI, live EHR sync, sharing, diagnostic DICOM viewing, or 3D modeling until that recovery path is reliable and reviewed; safe preservation and inventory of DICOM media can be part of the initial archive flow.
 
 ## Security and medical disclaimer
 

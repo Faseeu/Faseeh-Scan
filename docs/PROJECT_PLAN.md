@@ -51,6 +51,7 @@ A user can create a password-protected vault, save PDF/image reports, organize a
 - Desktop app for Windows and macOS first; Linux is supported as a beta target.
 - One local vault and one patient profile.
 - Import PDF, PNG, JPEG, and TIFF by picker or drag-and-drop.
+- Preserve a complete DICOM CD/DVD/folder export as encrypted media, inventory its `DICOMDIR`, and flag missing/unreadable instances without attempting clinical interpretation.
 - Password unlock, auto-lock, and offline recovery key.
 - Original file encryption before persistent app storage or network transfer.
 - App-created Google Drive folder using the narrow `drive.file` OAuth scope.
@@ -73,7 +74,7 @@ A user can create a password-protected vault, save PDF/image reports, organize a
 - No direct patient-portal/EHR synchronization.
 - No real-time multi-device editing.
 - No sharing links or collaboration.
-- No DICOM PACS server.
+- No DICOM PACS server or claim that the MVP viewer is suitable for diagnosis; MVP imaging support is preservation, inventory, and safe handoff.
 - No promise of HIPAA, GDPR, FDA, CE, or other certification merely because encryption is present.
 
 These are deliberate boundaries, not missing ambition. They keep the first release focused on the hardest promise: **safe, understandable recovery**.
@@ -103,7 +104,7 @@ These are deliberate boundaries, not missing ambition. They keep the first relea
 | **Redacted export** | Detect likely identifiers and help make a shareable copy. | Redaction must be burned into the export and verified visually; hiding PDF layers is insufficient. |
 | **Emergency card** | Generate a compact, user-approved allergies/medications/contact packet. | It must show generation date and “verify before use”; never infer missing facts. |
 | **Multilingual OCR** | Support records from different countries and scripts. | Language is selected/confirmed locally; test accuracy per language. |
-| **DICOM handoff/viewer** | Keep imaging studies with reports and open them in a proper viewer. | Treat diagnostic viewing and storage as an optional, separately hardened module. |
+| **DICOM rescue and handoff** | Preserve an endangered CD as encrypted data, inventory missing series/instances, link its report, and later open it in a proven viewer. | MVP preservation is not diagnostic viewing; parsing/viewing remains sandboxed. See the [medical imaging strategy](MEDICAL_IMAGING_STRATEGY.md). |
 
 ### Explore later — exciting but easy to get wrong
 
@@ -326,7 +327,8 @@ Time estimates assume one experienced full-time engineer with part-time design a
 - Tauri shell, locked/unlocked state, auto-lock, and OS keychain integration.
 - Key creation, password wrapper, recovery-key ceremony.
 - Encrypted immutable object store and SQLCipher migrations.
-- Import validation for PDF/images.
+- Import validation for PDF/images and complete DICOM media trees.
+- DICOM media inventory: preserve source tree, parse `DICOMDIR`, hash instances, and report unreadable/missing files without executing bundled viewer software.
 - Basic list and metadata editor.
 
 **Exit gate:** restart/unlock, wrong-password, corrupt-keyring, and recovery-key tests pass on all target OSes.
@@ -348,6 +350,7 @@ Time estimates assume one experienced full-time engineer with part-time design a
 - OCR worker and encrypted FTS index.
 - Smart Inbox metadata suggestions with confidence and confirmation.
 - Timeline, filters, tags, duplicate/version handling.
+- Imaging-study inventory linked to its report; advanced DICOM rendering remains a later hardened integration.
 - Selected-document export with plaintext warning.
 
 **Exit gate:** a user can import and locate a chosen record from a 500-document synthetic archive in under 30 seconds.
@@ -426,6 +429,7 @@ Recommended order:
 - MIME/signature validation and size limits.
 - Immutable original and version model.
 - Duplicate detection and guarded staging cleanup.
+- DICOM media-tree preservation, `DICOMDIR` inventory, instance hashes, completeness report, and safe no-execute handling of bundled viewers.
 - Metadata editing and profile assignment.
 
 ### Backup engine
