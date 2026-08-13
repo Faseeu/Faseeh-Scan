@@ -44,15 +44,48 @@ class VaultService:
 class DocumentsService:
     """Add/list/get/delete/tag/star documents and attach artifacts."""
 
-    def __init__(self, vault: Vault):
+    def __init__(self, vault: Vault, settings: "Settings | None" = None):
         self.vault = vault
+        self.settings = settings
 
     def add(self, data: bytes, name: str, content_type: str = "application/octet-stream",
             *, source: str = "import", tags: list[str] | None = None,
-            note: str = "") -> DocumentMeta:
-        return self.vault.add_document(
+            note: str = "", make_thumbnail: bool = True,
+            run_ocr: bool | None = None) -> DocumentMeta:
+        meta = self.vault.add_document(
             data, name, content_type, source=source, tags=tags or [], note=note
         )
+        # Sidecars are best-effort and must never break adding the original.
+        if make_thumbnail:
+            self._try_thumbnail(meta.id, data, content_type)
+        should_ocr = (self.settings.ocr_enabled if self.settings else False) \
+            if run_ocr is None else run_ocr
+        if should_ocr:
+            self._try_ocr(meta.id, data, content_type)
+        return meta
+
+    def _try_thumbnail(self, doc_id: str, data: bytes, content_type: str) -> None:
+        try:
+            from .features.thumbnails import make_thumbnail
+            thumb = make_thumbnail(data, content_type)
+            if thumb:
+                self.vault.put_artifact(doc_id, "thumb", thumb, "image/jpeg")
+        except Exception:
+            pass
+
+    def _try_ocr(self, doc_id: str, data: bytes, content_type: str) -> None:
+        try:
+            from .features.ocr import default as default_ocr
+            engine = default_ocr()
+            if engine is None:
+                return
+            text = engine.extract(data, content_type)
+            if text and text.strip():
+                self.vault.put_artifact(doc_id, "ocr", text.encode("utf-8"),
+                                        "text/plain")
+        except Exception:
+            pass
+
 
     def list(self) -> list[DocumentMeta]:
         return self.vault.list_documents()

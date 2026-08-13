@@ -24,6 +24,7 @@ from .. import crypto
 from ..config import settings
 from ..vault import Vault
 from ..services import VaultService, DocumentsService, BackupService
+from ..settings import Settings
 from ..backends import LocalBackend, GoogleDriveBackend, GDriveNotConfigured
 from ..features.capture import CaptureService, CaptureResult, CapturedPage
 from ..features.processing import ProcessOptions, SUPPORTED as PROCESSING_SUPPORTED
@@ -66,10 +67,12 @@ class App:
         self.page = page
         self.vault = Vault(default_vault_dir())
         self.vault_svc = VaultService(self.vault)
-        self.docs = DocumentsService(self.vault)
+        self.settings = Settings.load()
+        self.docs = DocumentsService(self.vault, self.settings)
         self.backup_svc = BackupService(self.vault)
         self.capture_svc = CaptureService(self.docs)
         self.backend = None
+        self._search_query = ""
         # Pending pages captured via the file picker (list of Paths).
         self._pending_pages: list[Path] = []
         self.file_picker = ft.FilePicker(on_result=self.on_files_picked)
@@ -304,35 +307,53 @@ class App:
         )
 
     def _build_documents_view(self):
-        documents = self.docs.list()
+        documents = (self.docs.search(self._search_query)
+                     if self._search_query.strip() else self.docs.list())
         title = ft.Text("Your documents", size=26, weight=ft.FontWeight.BOLD)
+
+        search_field = ft.TextField(
+            hint_text="Search by name, tag, or text inside…",
+            prefix_icon=ft.Icons.SEARCH,
+            value=self._search_query or "",
+            width=420,
+            dense=True,
+            on_change=self._on_search,
+        )
+
         if not documents:
+            empty_msg = ("No matches" if self._search_query.strip()
+                         else "No documents yet")
+            empty_hint = ("Try a different search." if self._search_query.strip()
+                          else "Add a PDF, photo, or document — it's encrypted on this device.")
             content = ft.Column([
-                title,
+                title, search_field,
                 ft.Container(
                     ft.Column([
-                        ft.Icon(ft.Icons.DESCRIPTION_OUTLINED, size=64, color=ft.Colors.GREY_300),
-                        ft.Text("No documents yet", size=18, color=ft.Colors.GREY_600),
-                        ft.Text("Add a PDF, photo, or document — it's encrypted on this device.",
-                                color=ft.Colors.GREY_500),
-                        ft.Row([
-                            ft.FilledButton("Scan document", icon=ft.Icons.DOCUMENT_SCANNER,
-                                            on_click=self.start_scan),
-                            ft.OutlinedButton("Add first document", on_click=lambda e: self.file_picker.pick_files(
-                                allow_multiple=True,
-                                allowed_extensions=["pdf", "jpg", "jpeg", "png", "doc", "docx", "txt", "webp"])),
-                        ], alignment=ft.MainAxisAlignment.CENTER),
+                        ft.Icon(ft.Icons.SEARCH if self._search_query.strip()
+                                else ft.Icons.DESCRIPTION_OUTLINED,
+                                size=64, color=ft.Colors.GREY_300),
+                        ft.Text(empty_msg, size=18, color=ft.Colors.GREY_600),
+                        ft.Text(empty_hint, color=ft.Colors.GREY_500),
                     ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=12),
                     alignment=ft.alignment.center, expand=True,
                 ),
             ], expand=True)
         else:
             rows = [self._document_card(r) for r in documents]
-            content = ft.Column([title, ft.Text(f"{len(documents)} document(s) stored locally",
-                                                color=ft.Colors.GREY_600),
-                                 ft.ListView(rows, spacing=10, expand=True, padding=ft.padding.only(top=8))],
-                                expand=True)
+            count = f"{len(documents)} document(s)"
+            if self._search_query.strip():
+                count += f" matching “{self._search_query}”"
+            content = ft.Column([
+                ft.Row([title], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                ft.Row([search_field]),
+                ft.Text(count, color=ft.Colors.GREY_600),
+                ft.ListView(rows, spacing=10, expand=True, padding=ft.padding.only(top=8)),
+            ], expand=True)
         return content
+
+    def _on_search(self, e):
+        self._search_query = e.control.value or ""
+        self.show_documents()
 
     def _document_card(self, r):
         icons = {
@@ -346,14 +367,22 @@ class App:
             bgcolor=ft.Colors.GREEN, padding=ft.padding.symmetric(horizontal=8, vertical=3),
             border_radius=12, visible=bool(r.backed_up_to),
         )
+        ocr_badge = ft.Container(
+            ft.Text("OCR", size=10, color=ft.Colors.WHITE),
+            bgcolor=ft.Colors.BLUE_GREY, padding=ft.padding.symmetric(horizontal=6, vertical=2),
+            border_radius=8, visible=("ocr" in r.artifacts),
+        )
+        thumb = self._thumbnail_widget(r)
         return ft.Card(
             ft.Container(
                 ft.Row([
-                    ft.Icon(icons.get(r.content_type, ft.Icons.DESCRIPTION), size=32, color=PRIMARY),
+                    thumb,
                     ft.Column([
-                        ft.Row([ft.Text(r.name, weight=ft.FontWeight.W_600, size=15), badge]),
+                        ft.Row([ft.Text(r.name, weight=ft.FontWeight.W_600, size=15),
+                                badge, ocr_badge]),
                         ft.Text(f"{human_size(r.size)} · encrypted",
                                 size=12, color=ft.Colors.GREY_600),
+                        ft.Text(r.note, size=11, color=ft.Colors.GREY_500) if r.note else ft.Container(),
                     ], spacing=4, expand=True),
                     ft.IconButton(ft.Icons.DOWNLOAD, tooltip="Decrypt & save",
                                   on_click=lambda e, rid=r.id: self.save_document(rid)),
@@ -364,6 +393,26 @@ class App:
             ),
             elevation=1,
         )
+
+    def _thumbnail_widget(self, r):
+        icon = {
+            "application/pdf": ft.Icons.PICTURE_AS_PDF,
+            "image/jpeg": ft.Icons.IMAGE,
+            "image/png": ft.Icons.IMAGE,
+        }.get(r.content_type, ft.Icons.DESCRIPTION)
+        if "thumb" not in r.artifacts:
+            return ft.Icon(icon, size=40, color=PRIMARY)
+        try:
+            data = self.docs.get_artifact(r.id, "thumb")
+            import base64
+            b64 = base64.b64encode(data).decode("ascii")
+            return ft.Container(
+                ft.Image(src_base64=b64, width=50, height=66, fit=ft.ImageFit.COVER,
+                         border_radius=ft.border_radius.all(4)),
+                width=50, height=66,
+            )
+        except Exception:
+            return ft.Icon(icon, size=40, color=PRIMARY)
 
     # ---- scan / capture flow --------------------------------------------
 
@@ -406,13 +455,12 @@ class App:
         self._show_scan_review()
 
     def _ocr_enabled(self) -> bool:
-        # OCR opt-in; off by default in v1 to keep scans fast.
-        return False
+        return bool(self.settings.ocr_enabled)
 
     def _show_scan_review(self):
         """Review chosen pages: choose a filter, toggle PDF, name, save."""
         filter_dd = ft.Dropdown(
-            label="Look", value="magic", width=200, dense=True,
+            label="Look", value=self.settings.default_filter, width=200, dense=True,
             options=[ft.dropdown.Option(k, label=label) for k, label in [
                 ("magic", "Clean scan"),
                 ("color", "Color"),
@@ -426,13 +474,31 @@ class App:
             label="Clean up pages", value=PROCESSING_SUPPORTED, width=220,
             disabled=not PROCESSING_SUPPORTED,
         )
+        ocr_toggle = ft.Switch(
+            label="Extract text (OCR, makes searchable)",
+            value=self.settings.ocr_enabled, width=360,
+        )
         name_field = ft.TextField(
             label="Document name", value=self._default_scan_name(), width=320,
         )
         page_count = ft.Text(f"{len(self._pending_pages)} page(s)",
                              color=ft.Colors.GREY_700)
+        rotation = {"deg": 0}
+
+        def rotate_pages(_):
+            rotation["deg"] = (rotation["deg"] + 90) % 360
+            rotate_btn.text = f"Rotate {rotation['deg']}\u00b0"
+            self.page.update()
+
+        rotate_btn = ft.OutlinedButton(
+            "Rotate 0\u00b0", icon=ft.Icons.ROTATE_RIGHT, on_click=rotate_pages,
+            width=220,
+        )
 
         def save(_):
+            self.settings.ocr_enabled = bool(ocr_toggle.value)
+            self.settings.default_filter = filter_dd.value or "magic"
+            self.settings.save()
             dlg.open = False
             self.page.update()
             self._save_scan(
@@ -440,6 +506,7 @@ class App:
                 filter_name=filter_dd.value or "magic",
                 process=bool(process_toggle.value),
                 as_pdf=bool(as_pdf.value),
+                rotate=rotation["deg"],
             )
 
         def add_more(_):
@@ -458,8 +525,10 @@ class App:
                     page_count,
                     name_field,
                     ft.Row([filter_dd]),
+                    rotate_btn,
                     process_toggle,
                     as_pdf,
+                    ocr_toggle,
                     ft.Text(
                         "Pages are cleaned on this device and stored encrypted. "
                         if PROCESSING_SUPPORTED else
@@ -480,7 +549,8 @@ class App:
         from time import strftime
         return f"Scan {strftime('%Y-%m-%d %H%M')}.pdf"
 
-    def _save_scan(self, *, name: str, filter_name: str, process: bool, as_pdf: bool):
+    def _save_scan(self, *, name: str, filter_name: str, process: bool, as_pdf: bool,
+                   rotate: int = 0):
         try:
             pages = [CapturedPage(path=p, content_type=_guess_ct(p), source="camera")
                      for p in self._pending_pages]
@@ -489,7 +559,7 @@ class App:
                 result,
                 name=name,
                 process=process,
-                options=ProcessOptions(filter=filter_name),
+                options=ProcessOptions(filter=filter_name, rotate=rotate),
                 as_pdf=as_pdf,
                 ocr=self._ocr_enabled(),
                 source="camera",

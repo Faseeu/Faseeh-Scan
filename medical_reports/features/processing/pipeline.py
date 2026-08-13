@@ -39,6 +39,10 @@ class ProcessOptions:
     corners: Optional[Sequence[tuple[int, int]]] = None  # 4 points override
     rotate: int = 0               # 0, 90, 180, 270
 
+    def rotate_cw(self) -> "ProcessOptions":
+        self.rotate = (self.rotate + 90) % 360
+        return self
+
 
 # --------------------------------------------------------------------------
 # IO

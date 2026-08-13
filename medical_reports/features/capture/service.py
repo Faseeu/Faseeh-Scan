@@ -86,9 +86,8 @@ class CaptureService:
             if result.pdf_path is not None:
                 data = Path(result.pdf_path).read_bytes()
                 doc = self.documents.add(data, name or "scan.pdf",
-                                         "application/pdf", source=source)
-                if ocr:
-                    self._run_ocr(doc.id, data, "application/pdf")
+                                         "application/pdf", source=source,
+                                         run_ocr=ocr)
                 return doc
 
             # Process each page image.
@@ -111,12 +110,14 @@ class CaptureService:
                 images_to_pdf(processed, pdf_path)
                 data = pdf_path.read_bytes()
                 doc = self.documents.add(data, name or "scan.pdf",
-                                         "application/pdf", source=source)
+                                         "application/pdf", source=source,
+                                         run_ocr=ocr)
             elif len(processed) == 1:
                 p = processed[0]
                 data = p.read_bytes()
                 doc = self.documents.add(data, name or p.name,
-                                         _guess_type(p), source=source)
+                                         _guess_type(p), source=source,
+                                         run_ocr=ocr)
             else:
                 # Multiple non-PDF pages without PDF bundling: store first, rest?
                 # For v1 we always bundle to PDF above, so this is defensive.
@@ -124,27 +125,10 @@ class CaptureService:
                 images_to_pdf(processed, pdf_path)
                 data = pdf_path.read_bytes()
                 doc = self.documents.add(data, name or "scan.pdf",
-                                         "application/pdf", source=source)
+                                         "application/pdf", source=source,
+                                         run_ocr=ocr)
 
-            if ocr:
-                self._run_ocr(doc.id, data, doc.content_type)
             return doc
-
-    # ---- OCR -------------------------------------------------------------
-
-    def _run_ocr(self, doc_id: str, data: bytes, content_type: str) -> None:
-        from ..ocr import default as default_ocr
-        engine = default_ocr()
-        if engine is None:
-            return
-        try:
-            text = engine.extract(data, content_type)
-            if text.strip():
-                self.documents.put_artifact(doc_id, "ocr", text.encode("utf-8"),
-                                            "text/plain")
-        except Exception:
-            # OCR must never break capture/storage.
-            pass
 
 
 def _guess_type(p: Path) -> str:

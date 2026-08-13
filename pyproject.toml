@@ -24,6 +24,10 @@ scan = [
 ocr = [
     "rapidocr-onnxruntime>=1.3",
 ]
+# PDF thumbnails / rendering
+thumb = [
+    "pypdfium2>=4.20",
+]
 # PDF manipulation
 pdf = [
     "pypdf>=4.0",
