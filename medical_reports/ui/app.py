@@ -28,6 +28,7 @@ from ..settings import Settings
 from ..backends import LocalBackend, GoogleDriveBackend, GDriveNotConfigured
 from ..features.capture import CaptureService, CaptureResult, CapturedPage
 from ..features.processing import ProcessOptions, SUPPORTED as PROCESSING_SUPPORTED
+from ..features.share_intent import ShareIntentService, IncomingFile, mime_to_content_type
 from . import auth as google_auth
 
 
@@ -75,6 +76,9 @@ class App:
         self._search_query = ""
         # Pending pages captured via the file picker (list of Paths).
         self._pending_pages: list[Path] = []
+        self._images_to_pdf_mode = False
+        self.share = ShareIntentService()
+        self.share.on_incoming(self._on_incoming_share)
         self.file_picker = ft.FilePicker(on_result=self.on_files_picked)
         # A second picker that feeds the scan review flow.
         self.scan_picker = ft.FilePicker(on_result=self._on_scan_picked)
@@ -94,6 +98,12 @@ class App:
         except Exception:
             pass
         self.route()
+        # Home-screen quick action ("Scan document") — best-effort, mobile only.
+        try:
+            from ..features.quick_actions import attach as attach_quick_actions
+            attach_quick_actions(self.page, on_scan=self.start_scan)
+        except Exception:
+            pass
 
     # ---- routing ---------------------------------------------------------
 
@@ -103,6 +113,39 @@ class App:
         elif not self.vault_svc.is_unlocked:
             self.show_lock()
         else:
+            self.show_documents()
+            # Process any files shared from another app (now that we're unlocked).
+            self._ingest_pending_shares()
+
+    # ---- incoming shares / shortcuts ------------------------------------
+
+    def _on_incoming_share(self, files: list[IncomingFile]):
+        # If locked, they stay queued until unlock; otherwise ingest now.
+        if self.vault_svc.is_unlocked:
+            self._ingest_pending_shares()
+        else:
+            self.show_lock()
+
+    def _ingest_pending_shares(self):
+        if not self.vault_svc.is_unlocked:
+            return
+        items = [f for f in self.share.drain() if f.path]
+        if not items:
+            return
+        added = 0
+        for f in items:
+            p = Path(f.path)
+            try:
+                if p.exists():
+                    data = p.read_bytes()
+                    ctype = mime_to_content_type(f.mime, f.path)
+                    self.docs.add(data, p.name, ctype, source="share")
+                    added += 1
+            except Exception as ex:
+                self.snack(f"Could not import {p.name}: {ex}", error=True)
+        if added:
+            self.snack(f"Imported {added} shared document(s), encrypted.")
+            self._maybe_auto_backup()
             self.show_documents()
 
     def snack(self, msg: str, error: bool = False):

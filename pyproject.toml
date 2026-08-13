@@ -63,10 +63,12 @@ permissions = [
 ]
 deep_linking = { scheme = "faseehscan" }
 
-# ML Kit Document Scanner is added here as a normal Flutter dependency when
-# building the Android APK. The Python wrapper lives in the (optional)
-# faseeh-scan-mlkit Flet extension; it is not required for desktop/web.
+# Flutter plugins required by the Faseeh Scan Flet extensions (mobile).
+# These are only pulled into native builds; desktop/web runs without them.
+# Uncomment google_mlkit_document_scanner when the ML Kit extension is enabled.
 [tool.flet.flutter.pubspec.dependencies]
+receive_sharing_intent = { version = "^1.9.0" }
+quick_actions = { version = "^1.0.7" }
 # google_mlkit_document_scanner = { version = "^0.5.0" }
 
 [build-system]
