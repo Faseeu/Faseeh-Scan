@@ -90,6 +90,18 @@ class DocumentsService:
     def list(self) -> list[DocumentMeta]:
         return self.vault.list_documents()
 
+    def list_trash(self) -> list[DocumentMeta]:
+        return self.vault.list_trash()
+
+    def trash(self, doc_id: str) -> None:
+        self.vault.trash_document(doc_id)
+
+    def restore(self, doc_id: str) -> DocumentMeta:
+        return self.vault.restore_document(doc_id)
+
+    def empty_trash(self) -> int:
+        return self.vault.empty_trash()
+
     def get(self, doc_id: str) -> tuple[DocumentMeta, bytes]:
         return self.vault.get_document(doc_id)
 
@@ -130,6 +142,26 @@ class DocumentsService:
     def has_artifact(self, doc_id: str, key: str) -> bool:
         return self.vault.has_artifact(doc_id, key)
 
+    def replace_blob(self, document_id: str, data: bytes, *,
+                     name: str | None = None,
+                     content_type: str = "application/pdf",
+                     make_thumbnail: bool = True) -> DocumentMeta:
+        """Replace a document's encrypted bytes (e.g. after editing a PDF),
+        keeping its id, tags, note, and history."""
+        from . import crypto
+        meta = self.vault.get_meta(document_id)
+        container = crypto.encrypt_report(self.vault._master_key, data)
+        (self.vault.data_dir / f"{document_id}.bin").write_bytes(container)
+        meta.size = len(data)
+        meta.encrypted_size = len(container)
+        meta.content_type = content_type
+        if name:
+            meta.name = name
+        if "thumb" in meta.artifacts:
+            self._try_thumbnail(document_id, data, content_type)
+        self.vault.update_meta(meta)
+        return meta
+
     def search(self, query: str) -> list[DocumentMeta]:
         """Simple filename/note/tag search. OCR text is searched when an
         'ocr' artifact exists; semantic search is a later pluggable engine."""
@@ -137,7 +169,7 @@ class DocumentsService:
         if not q:
             return self.list()
         out: list[DocumentMeta] = []
-        for d in self.list():
+        for d in self.list():  # excludes trash
             haystack = " ".join([d.name, d.note, " ".join(d.tags)]).lower()
             if q in haystack:
                 out.append(d)

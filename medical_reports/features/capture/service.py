@@ -74,6 +74,7 @@ class CaptureService:
         as_pdf: bool = True,
         ocr: bool = False,
         source: str = "camera",
+        per_page_rotations: list[int] | None = None,
     ) -> DocumentMeta:
         """Process a CaptureResult (already-captured pages) and store it."""
         if result.is_empty:
@@ -92,16 +93,32 @@ class CaptureService:
 
             # Process each page image.
             processed = []
+            rotations = per_page_rotations or [0] * len(result.pages)
             for i, page in enumerate(result.pages):
                 if page.content_type.startswith("image/"):
                     if process and PROCESSING_SUPPORTED:
                         img = load_image(page.path)
-                        img = process_image(img, options or ProcessOptions())
+                        opts = ProcessOptions(
+                            filter=(options or ProcessOptions()).filter,
+                            auto_crop=(options or ProcessOptions()).auto_crop,
+                            rotate=rotations[i] if i < len(rotations) else 0,
+                        )
+                        img = process_image(img, opts)
                         out = tmp / f"page_{i:03d}.jpg"
                         save_image(img, out)
                         processed.append(out)
                     else:
-                        processed.append(page.path)
+                        # No cleanup: still need to honor rotation when bundling.
+                        if i < len(rotations) and rotations[i] % 360:
+                            from PIL import Image
+                            im = Image.open(page.path).rotate(
+                                {90: 90, 180: 180, 270: 270}.get(rotations[i] % 360, 0),
+                                expand=True)
+                            out = tmp / f"page_{i:03d}.jpg"
+                            im.convert("RGB").save(out, "JPEG", quality=92)
+                            processed.append(out)
+                        else:
+                            processed.append(page.path)
                 else:
                     processed.append(page.path)
 

@@ -83,8 +83,39 @@ def test_import_files_as_is():
         print("OK file imported as-is (no processing)")
 
 
+
+def test_per_page_rotation_and_order():
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        v = Vault(d / "vault")
+        v.create("pw")
+        docs = DocumentsService(v)
+        svc = CaptureService(docs)
+        paths = []
+        for i in range(3):
+            p = d / f"p{i}.jpg"
+            img = np.full((300, 400, 3), 240, np.uint8)
+            cv2.putText(img, f"PAGE{i}", (30, 150), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 0), 3)
+            cv2.imwrite(str(p), img)
+            paths.append(p)
+        # Reverse order and rotate middle page 90
+        pages = [CapturedPage(path=paths[2], content_type="image/jpeg"),
+                 CapturedPage(path=paths[0], content_type="image/jpeg"),
+                 CapturedPage(path=paths[1], content_type="image/jpeg")]
+        doc = svc.store_result(
+            CaptureResult(pages=pages), name="ordered.pdf",
+            process=False, as_pdf=True, ocr=False, source="import",
+            per_page_rotations=[0, 0, 90],
+        )
+        from medical_reports.features.pdf_tools import page_count
+        _, data = docs.get(doc.id)
+        assert page_count(data) == 3
+        print("OK per-page order + rotation applied")
+
+
 if __name__ == "__main__":
     test_scan_multi_page_pdf()
     test_scan_single_image_no_pdf()
     test_import_files_as_is()
+    test_per_page_rotation_and_order()
     print("\nScan flow tests passed.")

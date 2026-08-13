@@ -44,6 +44,8 @@ class DocumentMeta:
     artifacts: dict[str, dict] = field(default_factory=dict)
     # backend ids this document has been backed up to, e.g. ["gdrive"]
     backed_up_to: list[str] = field(default_factory=list)
+    # 0 = not deleted; otherwise unix timestamp when moved to trash
+    deleted_at: float = 0
 
 
 class Vault:
@@ -157,9 +159,16 @@ class Vault:
         self._save_meta()
         return meta
 
-    def list_documents(self) -> list[DocumentMeta]:
+    def list_documents(self, include_deleted: bool = False) -> list[DocumentMeta]:
         self._require_unlocked()
-        return sorted(self._meta.values(), key=lambda d: d.created_at, reverse=True)
+        docs = self._meta.values() if include_deleted else [
+            d for d in self._meta.values() if not d.deleted_at]
+        return sorted(docs, key=lambda d: d.created_at, reverse=True)
+
+    def list_trash(self) -> list[DocumentMeta]:
+        self._require_unlocked()
+        return sorted((d for d in self._meta.values() if d.deleted_at),
+                      key=lambda d: d.deleted_at, reverse=True)
 
     def get_document(self, document_id: str) -> tuple[DocumentMeta, bytes]:
         self._require_unlocked()
@@ -177,8 +186,36 @@ class Vault:
         self._meta[meta.id] = meta
         self._save_meta()
 
-    def delete_document(self, document_id: str) -> None:
+    def trash_document(self, document_id: str) -> None:
+        """Soft-delete: hides the document but keeps its data for undo."""
+        import time
         self._require_unlocked()
+        d = self._meta[document_id]
+        d.deleted_at = time.time()
+        self._save_meta()
+
+    def restore_document(self, document_id: str) -> DocumentMeta:
+        self._require_unlocked()
+        d = self._meta[document_id]
+        d.deleted_at = 0
+        self._save_meta()
+        return d
+
+    def empty_trash(self) -> int:
+        """Permanently delete all trashed documents. Returns count removed."""
+        self._require_unlocked()
+        removed = 0
+        for d in self.list_trash():
+            self._purge_document(d.id)
+            removed += 1
+        return removed
+
+    def delete_document(self, document_id: str) -> None:
+        """Permanently delete a single document and its artifacts."""
+        self._require_unlocked()
+        self._purge_document(document_id)
+
+    def _purge_document(self, document_id: str) -> None:
         path = self.data_dir / f"{document_id}.bin"
         if path.exists():
             crypto.secure_delete(str(path))
