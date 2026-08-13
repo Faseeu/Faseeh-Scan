@@ -25,6 +25,8 @@ from ..config import settings
 from ..vault import Vault
 from ..services import VaultService, DocumentsService, BackupService
 from ..backends import LocalBackend, GoogleDriveBackend, GDriveNotConfigured
+from ..features.capture import CaptureService, CaptureResult, CapturedPage
+from ..features.processing import ProcessOptions, SUPPORTED as PROCESSING_SUPPORTED
 from . import auth as google_auth
 
 
@@ -52,6 +54,13 @@ def human_size(n: int) -> str:
     return f"{n:.1f} TB"
 
 
+def _guess_ct(p: Path) -> str:
+    return {
+        ".pdf": "application/pdf", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+        ".png": "image/png", ".webp": "image/webp", ".txt": "text/plain",
+    }.get(p.suffix.lower(), "application/octet-stream")
+
+
 class App:
     def __init__(self, page: ft.Page):
         self.page = page
@@ -59,9 +68,15 @@ class App:
         self.vault_svc = VaultService(self.vault)
         self.docs = DocumentsService(self.vault)
         self.backup_svc = BackupService(self.vault)
+        self.capture_svc = CaptureService(self.docs)
         self.backend = None
+        # Pending pages captured via the file picker (list of Paths).
+        self._pending_pages: list[Path] = []
         self.file_picker = ft.FilePicker(on_result=self.on_files_picked)
+        # A second picker that feeds the scan review flow.
+        self.scan_picker = ft.FilePicker(on_result=self._on_scan_picked)
         self.page.overlay.append(self.file_picker)
+        self.page.overlay.append(self.scan_picker)
         self.page.title = APP_NAME
         self.page.theme = ft.Theme(color_scheme_seed=PRIMARY)
         self.page.bgcolor = BG
@@ -274,6 +289,7 @@ class App:
                 ft.Divider(height=1),
                 account_row,
                 ft.Divider(height=1),
+                nav(ft.Icons.DOCUMENT_SCANNER, "Scan document", self.start_scan),
                 nav(ft.Icons.FOLDER_SHARED, "Add document", lambda e: self.file_picker.pick_files(
                     allow_multiple=True,
                     allowed_extensions=["pdf", "jpg", "jpeg", "png", "doc", "docx", "txt", "webp"])),
@@ -299,9 +315,13 @@ class App:
                         ft.Text("No documents yet", size=18, color=ft.Colors.GREY_600),
                         ft.Text("Add a PDF, photo, or document — it's encrypted on this device.",
                                 color=ft.Colors.GREY_500),
-                        ft.FilledButton("Add first document", on_click=lambda e: self.file_picker.pick_files(
-                            allow_multiple=True,
-                            allowed_extensions=["pdf", "jpg", "jpeg", "png", "doc", "docx", "txt", "webp"])),
+                        ft.Row([
+                            ft.FilledButton("Scan document", icon=ft.Icons.DOCUMENT_SCANNER,
+                                            on_click=self.start_scan),
+                            ft.OutlinedButton("Add first document", on_click=lambda e: self.file_picker.pick_files(
+                                allow_multiple=True,
+                                allowed_extensions=["pdf", "jpg", "jpeg", "png", "doc", "docx", "txt", "webp"])),
+                        ], alignment=ft.MainAxisAlignment.CENTER),
                     ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=12),
                     alignment=ft.alignment.center, expand=True,
                 ),
@@ -344,6 +364,142 @@ class App:
             ),
             elevation=1,
         )
+
+    # ---- scan / capture flow --------------------------------------------
+
+    def start_scan(self, _=None):
+        """Begin a scan. Use the native ML Kit scanner when available,
+        otherwise let the user pick images from the device and review them."""
+        providers = self.capture_svc.available_providers()
+        mlkit = next((p for p in providers if p.id == "mlkit"), None)
+        if mlkit is not None:
+            # Native scanner returns directly; no review screen needed.
+            self._run_native_scan(mlkit)
+            return
+        # Desktop/web/no Play Services: choose images and review.
+        self._pending_pages = []
+        self.scan_picker.pick_files(
+            allow_multiple=True,
+            allowed_extensions=["jpg", "jpeg", "png", "webp", "pdf"],
+            file_type=ft.FilePickerFileType.IMAGE,
+        )
+
+    def _run_native_scan(self, provider):
+        try:
+            doc = self.capture_svc.capture_to_vault(
+                provider,
+                name="scan.pdf",
+                multi_page=True,
+                process=False,          # ML Kit already produces clean pages
+                as_pdf=True,
+                ocr=self._ocr_enabled(),
+            )
+            self.snack(f"Scanned and encrypted: {doc.name}")
+            self.show_documents()
+        except Exception as ex:
+            self.snack(f"Scan failed: {ex}", error=True)
+
+    def _on_scan_picked(self, e: ft.FilePickerResultEvent):
+        if not e.files:
+            return
+        self._pending_pages = [Path(f.path) for f in e.files]
+        self._show_scan_review()
+
+    def _ocr_enabled(self) -> bool:
+        # OCR opt-in; off by default in v1 to keep scans fast.
+        return False
+
+    def _show_scan_review(self):
+        """Review chosen pages: choose a filter, toggle PDF, name, save."""
+        filter_dd = ft.Dropdown(
+            label="Look", value="magic", width=200, dense=True,
+            options=[ft.dropdown.Option(k, label=label) for k, label in [
+                ("magic", "Clean scan"),
+                ("color", "Color"),
+                ("gray", "Grayscale"),
+                ("bw", "Black & white"),
+                ("original", "Original photo"),
+            ]],
+        )
+        as_pdf = ft.Switch(label="Combine into PDF", value=True, width=220)
+        process_toggle = ft.Switch(
+            label="Clean up pages", value=PROCESSING_SUPPORTED, width=220,
+            disabled=not PROCESSING_SUPPORTED,
+        )
+        name_field = ft.TextField(
+            label="Document name", value=self._default_scan_name(), width=320,
+        )
+        page_count = ft.Text(f"{len(self._pending_pages)} page(s)",
+                             color=ft.Colors.GREY_700)
+
+        def save(_):
+            dlg.open = False
+            self.page.update()
+            self._save_scan(
+                name=name_field.value or "scan.pdf",
+                filter_name=filter_dd.value or "magic",
+                process=bool(process_toggle.value),
+                as_pdf=bool(as_pdf.value),
+            )
+
+        def add_more(_):
+            dlg.open = False
+            self.page.update()
+            self.scan_picker.pick_files(
+                allow_multiple=True, file_type=ft.FilePickerFileType.IMAGE,
+                allowed_extensions=["jpg", "jpeg", "png", "webp"],
+            )
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Review scan"),
+            content=ft.Container(
+                ft.Column([
+                    page_count,
+                    name_field,
+                    ft.Row([filter_dd]),
+                    process_toggle,
+                    as_pdf,
+                    ft.Text(
+                        "Pages are cleaned on this device and stored encrypted. "
+                        if PROCESSING_SUPPORTED else
+                        "Install the [scan] extra for image cleanup; storing originals as-is.",
+                        size=11, color=ft.Colors.GREY_600, width=360),
+                ], tight=True, spacing=12, width=380),
+                width=400,
+            ),
+            actions=[
+                ft.TextButton("Add pages", on_click=add_more),
+                ft.TextButton("Cancel", on_click=lambda e: self._close_dlg(dlg)),
+                ft.FilledButton("Save encrypted", on_click=save),
+            ],
+        )
+        self.page.open(dlg)
+
+    def _default_scan_name(self) -> str:
+        from time import strftime
+        return f"Scan {strftime('%Y-%m-%d %H%M')}.pdf"
+
+    def _save_scan(self, *, name: str, filter_name: str, process: bool, as_pdf: bool):
+        try:
+            pages = [CapturedPage(path=p, content_type=_guess_ct(p), source="camera")
+                     for p in self._pending_pages]
+            result = CaptureResult(pages=pages)
+            doc = self.capture_svc.store_result(
+                result,
+                name=name,
+                process=process,
+                options=ProcessOptions(filter=filter_name),
+                as_pdf=as_pdf,
+                ocr=self._ocr_enabled(),
+                source="camera",
+            )
+            self.snack(f"Encrypted: {doc.name}")
+        except Exception as ex:
+            self.snack(f"Could not save scan: {ex}", error=True)
+        finally:
+            self._pending_pages = []
+            self.show_documents()
 
     # ---- actions ---------------------------------------------------------
 

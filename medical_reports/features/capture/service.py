@@ -59,6 +59,23 @@ class CaptureService:
     ) -> DocumentMeta:
         """Run the capture flow and store the result as one document."""
         result: CaptureResult = provider.capture(multi_page=multi_page)
+        return self.store_result(
+            result, name=name, process=process, options=options,
+            as_pdf=as_pdf, ocr=ocr,
+        )
+
+    def store_result(
+        self,
+        result: CaptureResult,
+        *,
+        name: str,
+        process: bool = True,
+        options: Optional[ProcessOptions] = None,
+        as_pdf: bool = True,
+        ocr: bool = False,
+        source: str = "camera",
+    ) -> DocumentMeta:
+        """Process a CaptureResult (already-captured pages) and store it."""
         if result.is_empty:
             raise RuntimeError("No pages were captured.")
 
@@ -69,7 +86,7 @@ class CaptureService:
             if result.pdf_path is not None:
                 data = Path(result.pdf_path).read_bytes()
                 doc = self.documents.add(data, name or "scan.pdf",
-                                         "application/pdf", source="camera")
+                                         "application/pdf", source=source)
                 if ocr:
                     self._run_ocr(doc.id, data, "application/pdf")
                 return doc
@@ -94,12 +111,12 @@ class CaptureService:
                 images_to_pdf(processed, pdf_path)
                 data = pdf_path.read_bytes()
                 doc = self.documents.add(data, name or "scan.pdf",
-                                         "application/pdf", source="camera")
+                                         "application/pdf", source=source)
             elif len(processed) == 1:
                 p = processed[0]
                 data = p.read_bytes()
                 doc = self.documents.add(data, name or p.name,
-                                         _guess_type(p), source="camera")
+                                         _guess_type(p), source=source)
             else:
                 # Multiple non-PDF pages without PDF bundling: store first, rest?
                 # For v1 we always bundle to PDF above, so this is defensive.
@@ -107,7 +124,7 @@ class CaptureService:
                 images_to_pdf(processed, pdf_path)
                 data = pdf_path.read_bytes()
                 doc = self.documents.add(data, name or "scan.pdf",
-                                         "application/pdf", source="camera")
+                                         "application/pdf", source=source)
 
             if ocr:
                 self._run_ocr(doc.id, data, doc.content_type)
