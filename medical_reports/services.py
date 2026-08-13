@@ -145,22 +145,27 @@ class DocumentsService:
     def replace_blob(self, document_id: str, data: bytes, *,
                      name: str | None = None,
                      content_type: str = "application/pdf",
-                     make_thumbnail: bool = True) -> DocumentMeta:
+                     make_thumbnail: bool = True,
+                     label: str = "edit") -> DocumentMeta:
         """Replace a document's encrypted bytes (e.g. after editing a PDF),
-        keeping its id, tags, note, and history."""
-        from . import crypto
-        meta = self.vault.get_meta(document_id)
-        container = crypto.encrypt_report(self.vault._master_key, data)
-        (self.vault.data_dir / f"{document_id}.bin").write_bytes(container)
-        meta.size = len(data)
-        meta.encrypted_size = len(container)
-        meta.content_type = content_type
+        keeping its id, tags, note, and a versioned history of prior blobs."""
+        meta = self.vault.replace_blob(
+            document_id, data, content_type=content_type, label=label)
         if name:
             meta.name = name
         if "thumb" in meta.artifacts:
             self._try_thumbnail(document_id, data, content_type)
         self.vault.update_meta(meta)
         return meta
+
+    def list_versions(self, doc_id: str) -> list[dict]:
+        return self.vault.list_versions(doc_id)
+
+    def get_version(self, doc_id: str, artifact_key: str) -> bytes:
+        return self.vault.get_version(doc_id, artifact_key)
+
+    def restore_version(self, doc_id: str, artifact_key: str) -> DocumentMeta:
+        return self.vault.restore_version(doc_id, artifact_key, label="restore")
 
     def search(self, query: str) -> list[DocumentMeta]:
         """Simple filename/note/tag search. OCR text is searched when an
@@ -214,3 +219,36 @@ class BackupService:
             return 0
         bid = self._backend.id
         return sum(1 for d in self.vault.list_documents() if bid not in d.backed_up_to)
+
+    def last_backup_time(self) -> float | None:
+        """Newest mtime among files the backend would sync, or None."""
+        if self._backend is None:
+            return None
+        times = []
+        for _, p in self.vault.iter_encrypted_files():
+            try:
+                times.append(p.stat().st_mtime)
+            except OSError:
+                pass
+        return max(times) if times else None
+
+    def health(self) -> dict:
+        """Summary used by the UI's backup indicator."""
+        pending = self.pending_count()
+        last = self.last_backup_time()
+        return {
+            "has_backend": self._backend is not None,
+            "pending": pending,
+            "last_backup": last,
+            "ok": self._backend is not None and pending == 0,
+        }
+
+    def auto_backup_if_needed(self, *, wifi_only: bool = False) -> int:
+        """Run a backup if anything is pending. Returns number of files uploaded
+        (0 when nothing to do). wifi_only is enforced by the caller based on
+        platform connectivity; here we simply skip when there is no backend."""
+        if self._backend is None:
+            return 0
+        if self.pending_count() == 0:
+            return 0
+        return self._backend.backup_vault(self.vault)

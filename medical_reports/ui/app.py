@@ -87,6 +87,12 @@ class App:
         # Flet fires this after the Google OAuth redirect returns.
         self.page.on_login = self._on_google_login
         self.page.on_route_change = lambda e: self.route()
+        # Pre-select a backend so the health indicator and auto-backup work
+        # without an explicit "Backup now" first. Falls back to local folder.
+        try:
+            self.backup_svc.use(self._pick_backend())
+        except Exception:
+            pass
         self.route()
 
     # ---- routing ---------------------------------------------------------
@@ -246,6 +252,25 @@ class App:
         self.page.update()
 
     def _build_sidebar(self):
+        # Backup health indicator.
+        health = self.backup_svc.health() if self.backup_svc.backend else None
+        if health is None:
+            health_dot = ft.Row([
+                ft.Icon(ft.Icons.CLOUD_OFF, size=16, color=ft.Colors.GREY_500),
+                ft.Text("No backup selected", size=11, color=ft.Colors.GREY_600),
+            ])
+        elif health["ok"]:
+            health_dot = ft.Row([
+                ft.Icon(ft.Icons.CHECK_CIRCLE, size=16, color=ft.Colors.GREEN),
+                ft.Text("All backed up", size=11, color=ft.Colors.GREY_700),
+            ])
+        else:
+            health_dot = ft.Row([
+                ft.Icon(ft.Icons.ERROR, size=16, color=ft.Colors.ORANGE),
+                ft.Text(f"{health['pending']} not backed up", size=11,
+                        color=ft.Colors.ORANGE),
+            ])
+
         def nav(icon, label, on_click):
             return ft.Container(
                 ft.Row([ft.Icon(icon, color=ft.Colors.GREY_700),
@@ -292,6 +317,10 @@ class App:
                 ft.Divider(height=1),
                 account_row,
                 ft.Divider(height=1),
+                ft.Container(
+                    ft.Row([health_dot], spacing=6),
+                    padding=ft.padding.symmetric(horizontal=16, vertical=8),
+                ),
                 nav(ft.Icons.DOCUMENT_SCANNER, "Scan document", self.start_scan),
                 nav(ft.Icons.FOLDER_SHARED, "Add document", lambda e: self.file_picker.pick_files(
                     allow_multiple=True,
@@ -300,6 +329,7 @@ class App:
                 nav(ft.Icons.DELETE_OUTLINE, "Trash", self.show_trash),
                 nav(ft.Icons.CLOUD_UPLOAD, "Backup now", self.backup_now),
                 nav(ft.Icons.CLOUD_DOWNLOAD, "Restore from Drive", self.restore_now),
+                nav(ft.Icons.SETTINGS, "Settings", self.settings_dialog),
                 nav(ft.Icons.KEY, "Change password", self.change_password_dialog),
                 nav(ft.Icons.LOCK_OUTLINE, "Lock vault", lambda e: self.lock_vault()),
                 ft.Container(expand=True),
@@ -386,6 +416,9 @@ class App:
                                 size=12, color=ft.Colors.GREY_600),
                         ft.Text(r.note, size=11, color=ft.Colors.GREY_500) if r.note else ft.Container(),
                     ], spacing=4, expand=True),
+                    ft.IconButton(ft.Icons.HISTORY, tooltip="Version history",
+                                  visible=bool(r.versions),
+                                  on_click=lambda e, rid=r.id: self.show_history(rid)),
                     ft.IconButton(ft.Icons.EDIT_NOTE,
                                   tooltip="Arrange pages",
                                   visible=(r.content_type == "application/pdf"),
@@ -451,6 +484,7 @@ class App:
                 ocr=self._ocr_enabled(),
             )
             self.snack(f"Scanned and encrypted: {doc.name}")
+            self._maybe_auto_backup()
             self.show_documents()
         except Exception as ex:
             self.snack(f"Scan failed: {ex}", error=True)
@@ -627,6 +661,7 @@ class App:
                 per_page_rotations=rotations,
             )
             self.snack(f"Encrypted: {doc.name}")
+            self._maybe_auto_backup()
         except Exception as ex:
             self.snack(f"Could not save scan: {ex}", error=True)
         finally:
@@ -758,6 +793,7 @@ class App:
             dlg.open = False
             self.page.update()
             self.snack("PDF updated.")
+            self._maybe_auto_backup()
             self.show_documents()
 
         col = ft.Column([], spacing=2)
@@ -775,6 +811,105 @@ class App:
                 ft.TextButton("Cancel", on_click=lambda e: self._close_dlg(dlg)),
                 ft.FilledButton("Apply changes", on_click=apply),
             ],
+        )
+        self.page.open(dlg)
+
+    # ---- settings --------------------------------------------------------
+
+    def settings_dialog(self, _=None):
+        ocr_switch = ft.Switch(
+            label="Extract text from scans (OCR, makes searchable)",
+            value=self.settings.ocr_enabled, width=420)
+        wifi_switch = ft.Switch(
+            label="Auto-backup over Wi-Fi only",
+            value=self.settings.wifi_only_backup, width=420)
+        filter_dd = ft.Dropdown(
+            label="Default scan look", value=self.settings.default_filter, width=240, dense=True,
+            options=[ft.dropdown.Option(k, label=l) for k, l in [
+                ("magic", "Clean scan"), ("color", "Color"),
+                ("gray", "Grayscale"), ("bw", "Black & white"),
+                ("original", "Original")]])
+
+        def save(_):
+            self.settings.ocr_enabled = bool(ocr_switch.value)
+            self.settings.wifi_only_backup = bool(wifi_switch.value)
+            self.settings.default_filter = filter_dd.value or "magic"
+            self.settings.save()
+            dlg.open = False
+            self.page.update()
+            self.snack("Settings saved.")
+            self.show_documents()
+
+        dlg = ft.AlertDialog(
+            modal=True, title=ft.Text("Settings"),
+            content=ft.Container(ft.Column([
+                ft.Text("Scanning", weight=ft.FontWeight.W_600),
+                filter_dd, ocr_switch,
+                ft.Divider(),
+                ft.Text("Backup", weight=ft.FontWeight.W_600),
+                wifi_switch,
+                ft.Text("A backup runs automatically after you add or edit a "
+                        "document when a destination is available.",
+                        size=11, color=ft.Colors.GREY_600, width=440),
+            ], tight=True, spacing=12, width=460), width=480),
+            actions=[ft.TextButton("Cancel", on_click=lambda e: self._close_dlg(dlg)),
+                     ft.FilledButton("Save", on_click=save)],
+        )
+        self.page.open(dlg)
+
+    # ---- version history -------------------------------------------------
+
+    def show_history(self, rid: str):
+        meta, _ = self.docs.get(rid)
+        versions = self.docs.list_versions(rid)
+        rows = []
+
+        # Current version row
+        rows.append(ft.Container(
+            ft.Row([
+                ft.Icon(ft.Icons.FIBER_MANUAL_RECORD, size=12, color=ft.Colors.GREEN),
+                ft.Column([
+                    ft.Text("Current version", weight=ft.FontWeight.W_600, size=13),
+                    ft.Text(f"{human_size(meta.size)} · {meta.content_type}",
+                            size=11, color=ft.Colors.GREY_600),
+                ], expand=True),
+            ]),
+            padding=10, bgcolor=ft.Colors.GREY_100, border_radius=6,
+        ))
+
+        def restore(key):
+            self.docs.restore_version(rid, key)
+            dlg.open = False
+            self.page.update()
+            self.snack("Restored previous version.")
+            self._maybe_auto_backup()
+            self.show_documents()
+
+        import time as _t
+        for v in reversed(versions):
+            key = v["artifact"]
+            when = _t.strftime("%Y-%m-%d %H:%M", _t.localtime(v.get("created_at", 0)))
+            rows.append(ft.Container(
+                ft.Row([
+                    ft.Icon(ft.Icons.HISTORY_TOGGLE_OFF, size=16, color=ft.Colors.GREY_600),
+                    ft.Column([
+                        ft.Text(f"{v.get('label', 'edit')} · {when}", size=13),
+                        ft.Text(f"{human_size(v.get('size', 0))} · {v.get('content_type', '')}",
+                                size=11, color=ft.Colors.GREY_600),
+                    ], expand=True),
+                    ft.TextButton("Restore", on_click=lambda e, k=key: restore(k)),
+                ]),
+                padding=10,
+            ))
+
+        dlg = ft.AlertDialog(
+            modal=True, title=ft.Text(f"History — {meta.name}"),
+            content=ft.Container(
+                ft.Column(rows if rows else [
+                    ft.Text("No previous versions yet.", color=ft.Colors.GREY_600)],
+                          tight=True, spacing=8, scroll=ft.ScrollMode.AUTO),
+                width=520, height=360),
+            actions=[ft.TextButton("Close", on_click=lambda e: self._close_dlg(dlg))],
         )
         self.page.open(dlg)
 
@@ -799,6 +934,7 @@ class App:
             except Exception as ex:
                 self.snack(f"Failed to add {f.name}: {ex}", error=True)
         self.snack(f"Encrypted and added {added} document(s).")
+        self._maybe_auto_backup()
         self.show_documents()
 
     def save_document(self, rid: str):
@@ -908,9 +1044,30 @@ class App:
 
         return LocalBackend(Path.home() / "MedicalReportsBackup" / "drive-sync")
 
+    def _select_backend(self):
+        """Pick a storage backend and register it with BackupService."""
+        be = self._pick_backend()
+        self.backup_svc.use(be)
+        return be
+
+    def _maybe_auto_backup(self):
+        """If a backend is configured and Wi-Fi-only allows it, sync pending
+        files. Errors are swallowed (backup is a background safety net)."""
+        if not self.backup_svc.backend:
+            try:
+                self._select_backend()
+            except Exception:
+                return
+        if self.backup_svc.backend and self.backup_svc.pending_count() > 0:
+            try:
+                self.backup_svc.auto_backup_if_needed(
+                    wifi_only=self.settings.wifi_only_backup)
+            except Exception:
+                pass
+
     def backup_now(self, _=None):
         try:
-            be = self._pick_backend()
+            be = self._select_backend()
         except GDriveNotConfigured as e:
             self.snack(f"{e} Tap 'Sign in with Google' first.", error=True)
             return

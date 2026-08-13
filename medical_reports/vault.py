@@ -46,6 +46,11 @@ class DocumentMeta:
     backed_up_to: list[str] = field(default_factory=list)
     # 0 = not deleted; otherwise unix timestamp when moved to trash
     deleted_at: float = 0
+    # List of prior versions: [{"artifact": "v0001", "size": int,
+    #   "content_type": str, "created_at": float, "label": str}, ...]
+    # The newest entry is the most recent previous version; current blob is
+    # always data/<id>.bin.
+    versions: list[dict] = field(default_factory=list)
 
 
 class Vault:
@@ -185,6 +190,70 @@ class Vault:
         self._require_unlocked()
         self._meta[meta.id] = meta
         self._save_meta()
+
+    # ---- version history -------------------------------------------------
+
+    MAX_VERSIONS = 10
+
+    def replace_blob(self, document_id: str, data: bytes, *,
+                     content_type: str = "application/octet-stream",
+                     label: str = "edit") -> DocumentMeta:
+        """Replace a document's current bytes, saving the previous version as
+        an encrypted sidecar. Returns the updated metadata."""
+        self._require_unlocked()
+        meta = self._meta[document_id]
+        # Save the CURRENT blob as a version before overwriting.
+        current_path = self.data_dir / f"{document_id}.bin"
+        if current_path.exists():
+            version_no = len(meta.versions) + 1
+            key = f"v{version_no:04d}"
+            vdir = self.artifacts_dir / document_id
+            vdir.mkdir(parents=True, exist_ok=True)
+            # Move current encrypted blob into versions.
+            os.replace(current_path, vdir / f"{key}.bin")
+            meta.versions.append({
+                "artifact": key,
+                "size": meta.size,
+                "content_type": meta.content_type,
+                "created_at": time.time(),
+                "label": label,
+            })
+        # Write the new current blob.
+        container = crypto.encrypt_report(self._master_key, data)
+        current_path.write_bytes(container)
+        meta.size = len(data)
+        meta.encrypted_size = len(container)
+        meta.content_type = content_type
+        # Trim old versions beyond MAX_VERSIONS.
+        while len(meta.versions) > self.MAX_VERSIONS:
+            old = meta.versions.pop(0)
+            op = self.artifacts_dir / document_id / f"{old['artifact']}.bin"
+            if op.exists():
+                crypto.secure_delete(str(op))
+        self._save_meta()
+        return meta
+
+    def list_versions(self, document_id: str) -> list[dict]:
+        self._require_unlocked()
+        return list(self._meta[document_id].versions)
+
+    def get_version(self, document_id: str, artifact_key: str) -> bytes:
+        self._require_unlocked()
+        p = self.artifacts_dir / document_id / f"{artifact_key}.bin"
+        if not p.exists():
+            raise KeyError(f"No version {artifact_key} for document {document_id}")
+        return crypto.decrypt_report(self._master_key, p.read_bytes())
+
+    def restore_version(self, document_id: str, artifact_key: str,
+                        label: str = "restore") -> DocumentMeta:
+        """Restore a prior version to be the current blob (keeps history)."""
+        data = self.get_version(document_id, artifact_key)
+        v = next((x for x in self._meta[document_id].versions
+                   if x["artifact"] == artifact_key), {})
+        return self.replace_blob(document_id, data,
+                                 content_type=v.get("content_type",
+                                                    "application/octet-stream"),
+                                 label=label)
 
     def trash_document(self, document_id: str) -> None:
         """Soft-delete: hides the document but keeps its data for undo."""
