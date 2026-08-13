@@ -21,6 +21,7 @@ BUILD_MODE="${1:-release}"
 echo "==> Installing Faseeh Scan Flet extensions (editable)"
 pip install -q -e ./extensions/faseeh_share
 pip install -q -e ./extensions/faseeh_quick_actions
+pip install -q -e ./extensions/faseeh_local_auth
 # ML Kit scanner extension is enabled by uncommenting the dependency in
 # pyproject.toml and installing it:
 if [ -d ./extensions/faseeh_scan_mlkit ]; then

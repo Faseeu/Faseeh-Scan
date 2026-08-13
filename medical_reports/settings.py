@@ -34,6 +34,7 @@ class Settings:
     default_as_pdf: bool = True
     dark_mode: str = "system"        # "system" | "light" | "dark"
     haptics: bool = True
+    biometric_unlock: bool = False
 
     @classmethod
     def load(cls, path: Path | None = None) -> "Settings":

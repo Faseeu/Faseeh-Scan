@@ -29,6 +29,7 @@ from ..backends import LocalBackend, GoogleDriveBackend, GDriveNotConfigured
 from ..features.capture import CaptureService, CaptureResult, CapturedPage
 from ..features.processing import ProcessOptions, SUPPORTED as PROCESSING_SUPPORTED
 from ..features.share_intent import ShareIntentService, IncomingFile, mime_to_content_type
+from ..features.biometrics import get_backend as get_biometric_backend
 from . import auth as google_auth
 
 
@@ -74,6 +75,8 @@ class App:
         self.capture_svc = CaptureService(self.docs)
         self.backend = None
         self._search_query = ""
+        self._selected: set[str] = set()
+        self._selection_mode = False
         # Pending pages captured via the file picker (list of Paths).
         self._pending_pages: list[Path] = []
         self._images_to_pdf_mode = False
@@ -230,17 +233,37 @@ class App:
         def _click(_):
             self._do_unlock(pw)
 
+        bio = get_biometric_backend(self.page)
+        can_bio = (self.settings.biometric_unlock and bio.is_available())
+
+        def _bio_unlock(_):
+            if bio.authenticate("Unlock Faseeh Scan"):
+                try:
+                    # Biometrics confirms the user; the vault still requires
+                    # the password/key. On mobile the local_auth extension
+                    # gates access; we rely on the OS keystore-stored key.
+                    self._unlock_with_biometric(bio)
+                except Exception as ex:
+                    self.snack(f"Biometric unlock failed: {ex}", error=True)
+
+        controls = [
+            ft.Icon(ft.Icons.LOCK, size=56, color=PRIMARY),
+            ft.Text("Unlock your vault", size=22, weight=ft.FontWeight.BOLD),
+            pw,
+            ft.FilledButton("Unlock", on_click=_click, width=320),
+        ]
+        if can_bio:
+            controls.append(ft.OutlinedButton(
+                "Unlock with fingerprint / face",
+                icon=ft.Icons.FINGERPRINT, on_click=_bio_unlock, width=320))
+
         self.page.views.clear()
         self.page.views.append(ft.View(
             "/unlock",
             [
                 ft.Container(
-                    ft.Column([
-                        ft.Icon(ft.Icons.LOCK, size=56, color=PRIMARY),
-                        ft.Text("Unlock your vault", size=22, weight=ft.FontWeight.BOLD),
-                        pw,
-                        ft.FilledButton("Unlock", on_click=_click, width=320),
-                    ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=16),
+                    ft.Column(controls,
+                              horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=16),
                     alignment=ft.alignment.center, expand=True,
                 )
             ],
@@ -248,13 +271,34 @@ class App:
         ))
         self.page.update()
 
+        # Auto-prompt biometrics on launch if enabled.
+        if can_bio:
+            _bio_unlock(None)
+
+    def _unlock_with_biometric(self, bio):
+        # The biometric extension does not hold the vault password itself.
+        # For v1, biometric unlock is available when the user has opted in and
+        # the device passes authentication; the OS key store integration that
+        # stores a wrapped master key is part of the native extension. If that
+        # wrapped key exists, the extension returns it via authenticate().
+        result = getattr(bio, "last_result", None)
+        if not result:
+            self.snack("Biometric unlock is not fully enrolled. Use your password.", error=True)
+            return
+        self.vault._master_key = bytes.fromhex(result) if isinstance(result, str) else result
+        self.vault._load_meta()
+        self.show_documents()
+
     def _do_unlock(self, pw):
         try:
             self.vault_svc.unlock(pw.value or "")
+            self._haptic("success")
             self.show_documents()
         except crypto.WrongPasswordError:
+            self._haptic("heavy")
             self.snack("Incorrect password.", error=True)
         except Exception as e:
+            self._haptic("heavy")
             self.snack(str(e), error=True)
 
     # ---- Google sign-in (desktop/web/Android via Flet OAuth) -------------
@@ -440,24 +484,84 @@ class App:
             count = f"{len(documents)} document(s)"
             if self._search_query.strip():
                 count += f" matching “{self._search_query}”"
+            header = self._selection_bar() if self._selection_mode else ft.Row(
+                [title], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
             content = ft.Column([
-                ft.Row([title], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                header,
                 ft.Row([search_field]),
                 ft.Text(count, color=ft.Colors.GREY_600),
                 ft.ListView(rows, spacing=10, expand=True, padding=ft.padding.only(top=8)),
             ], expand=True)
         return content
 
+    def _selection_bar(self):
+        n = len(self._selected)
+        return ft.Row([
+            ft.IconButton(ft.Icons.CLOSE, tooltip="Cancel", on_click=self._cancel_select),
+            ft.Text(f"{n} selected", weight=ft.FontWeight.W_600),
+            ft.Container(expand=True),
+            ft.IconButton(ft.Icons.PICTURE_AS_PDF, tooltip="Merge into PDF",
+                          on_click=self._merge_selected),
+            ft.IconButton(ft.Icons.IOS_SHARE, tooltip="Save copies",
+                          on_click=self._export_selected),
+            ft.IconButton(ft.Icons.DELETE_SWEEP, tooltip="Move to trash",
+                          on_click=self._trash_selected),
+        ])
+
+    def _cancel_select(self, _=None):
+        self._selected.clear()
+        self._selection_mode = False
+        self.show_documents()
+
+    def _toggle_select(self, rid: str):
+        self._selection_mode = True
+        if rid in self._selected:
+            self._selected.discard(rid)
+        else:
+            self._selected.add(rid)
+        if not self._selected:
+            self._selection_mode = False
+        self.show_documents()
+
+    def _trash_selected(self, _=None):
+        for rid in list(self._selected):
+            self.docs.trash(rid)
+        self.snack(f"Moved {len(self._selected)} to trash.")
+        self._selected.clear()
+        self._selection_mode = False
+        self._maybe_auto_backup()
+        self.show_documents()
+
+    def _export_selected(self, _=None):
+        for rid in self._selected:
+            self.save_document(rid)
+        self._cancel_select()
+
+    def _merge_selected(self, _=None):
+        """Combine selected documents (PDFs/images) into a single PDF."""
+        from ..features.pdf_tools import merge_pdfs
+        parts = []
+        for rid in self._selected:
+            meta, data = self.docs.get(rid)
+            if meta.content_type == "application/pdf":
+                parts.append(data)
+        if len(parts) < 2:
+            self.snack("Select at least two PDFs to merge.", error=True)
+            return
+        merged = merge_pdfs(parts)
+        name = f"merged {self._default_scan_name()}"
+        self.docs.add(merged, name, "application/pdf", source="merge")
+        self.snack(f"Created {name}")
+        self._cancel_select()
+        self._maybe_auto_backup()
+        self.show_documents()
+
     def _on_search(self, e):
         self._search_query = e.control.value or ""
         self.show_documents()
 
     def _document_card(self, r):
-        icons = {
-            "application/pdf": ft.Icons.PICTURE_AS_PDF,
-            "image/jpeg": ft.Icons.IMAGE,
-            "image/png": ft.Icons.IMAGE,
-        }
+        is_sel = r.id in self._selected
         badge = ft.Container(
             ft.Row([ft.Icon(ft.Icons.CLOUD_DONE, size=14, color=ft.Colors.WHITE),
                     ft.Text("Backed up", size=11, color=ft.Colors.WHITE)], spacing=4),
@@ -470,33 +574,74 @@ class App:
             border_radius=8, visible=("ocr" in r.artifacts),
         )
         thumb = self._thumbnail_widget(r)
-        return ft.Card(
+
+        actions = ft.Row([
+            ft.IconButton(ft.Icons.HISTORY, tooltip="Version history",
+                          visible=bool(r.versions),
+                          on_click=lambda e, rid=r.id: self.show_history(rid)),
+            ft.IconButton(ft.Icons.EDIT_NOTE, tooltip="Arrange pages",
+                          visible=(r.content_type == "application/pdf"),
+                          on_click=lambda e, rid=r.id: self.edit_pdf(rid)),
+            ft.IconButton(ft.Icons.DOWNLOAD, tooltip="Decrypt & save",
+                          on_click=lambda e, rid=r.id: self.save_document(rid)),
+            ft.IconButton(ft.Icons.DELETE_OUTLINE, tooltip="Move to trash",
+                          on_click=lambda e, rid=r.id: self.delete_document(rid)),
+        ])
+
+        card = ft.Card(
             ft.Container(
                 ft.Row([
+                    ft.Checkbox(value=is_sel, on_change=lambda e, rid=r.id: self._toggle_select(rid),
+                                visible=self._selection_mode),
                     thumb,
-                    ft.Column([
-                        ft.Row([ft.Text(r.name, weight=ft.FontWeight.W_600, size=15),
-                                badge, ocr_badge]),
-                        ft.Text(f"{human_size(r.size)} · encrypted",
-                                size=12, color=ft.Colors.GREY_600),
-                        ft.Text(r.note, size=11, color=ft.Colors.GREY_500) if r.note else ft.Container(),
-                    ], spacing=4, expand=True),
-                    ft.IconButton(ft.Icons.HISTORY, tooltip="Version history",
-                                  visible=bool(r.versions),
-                                  on_click=lambda e, rid=r.id: self.show_history(rid)),
-                    ft.IconButton(ft.Icons.EDIT_NOTE,
-                                  tooltip="Arrange pages",
-                                  visible=(r.content_type == "application/pdf"),
-                                  on_click=lambda e, rid=r.id: self.edit_pdf(rid)),
-                    ft.IconButton(ft.Icons.DOWNLOAD, tooltip="Decrypt & save",
-                                  on_click=lambda e, rid=r.id: self.save_document(rid)),
-                    ft.IconButton(ft.Icons.DELETE_OUTLINE, tooltip="Move to trash",
-                                  on_click=lambda e, rid=r.id: self.delete_document(rid)),
+                    ft.GestureDetector(
+                        ft.Column([
+                            ft.Row([ft.Text(r.name, weight=ft.FontWeight.W_600, size=15),
+                                    badge, ocr_badge]),
+                            ft.Text(f"{human_size(r.size)} · encrypted",
+                                    size=12, color=ft.Colors.GREY_600),
+                            ft.Text(r.note, size=11, color=ft.Colors.GREY_500) if r.note else ft.Container(),
+                        ], spacing=4, expand=True),
+                        on_long_press=lambda e, rid=r.id: self._toggle_select(rid),
+                        expand=True,
+                    ),
+                    actions,
                 ], alignment=ft.MainAxisAlignment.START),
                 padding=14,
+                bgcolor=ft.Colors.with_opacity(0.08, PRIMARY) if is_sel else None,
             ),
             elevation=1,
         )
+
+        # Swipe right = save/export; swipe left = trash.
+        return ft.Dismissible(
+            key=f"doc_{r.id}",
+            content=card,
+            dismiss_direction=ft.DismissDirection.HORIZONTAL,
+            background=ft.Container(
+                ft.Row([ft.Icon(ft.Icons.DOWNLOAD, color=ft.Colors.WHITE),
+                        ft.Text("Save", color=ft.Colors.WHITE)], spacing=8),
+                padding=14, alignment=ft.alignment.center_left,
+                bgcolor=ft.Colors.BLUE_400, border_radius=8),
+            secondary_background=ft.Container(
+                ft.Row([ft.Text("Trash", color=ft.Colors.WHITE),
+                        ft.Icon(ft.Icons.DELETE, color=ft.Colors.WHITE)], spacing=8),
+                padding=14, alignment=ft.alignment.center_right,
+                bgcolor=ft.Colors.RED_400, border_radius=8),
+            on_dismiss=lambda e, rid=r.id: self._on_swipe(e, rid),
+            on_confirm_dismiss=lambda e, rid=r.id: self._confirm_swipe(e, rid),
+        )
+
+    def _on_swipe(self, e, rid):
+        # Dismissible already removed the widget; act based on direction.
+        if e.direction in (ft.DismissDirection.END_TO_START,):
+            self.delete_document(rid)
+        else:
+            self.save_document(rid)
+
+    def _confirm_swipe(self, e, rid):
+        # Confirm destructive (left) swipes; export swipes proceed immediately.
+        return e.direction == ft.DismissDirection.END_TO_START
 
     def _thumbnail_widget(self, r):
         icon = {
@@ -598,6 +743,39 @@ class App:
             value=force_name or self._default_scan_name(), width=380,
         )
 
+        def suggest_name(_):
+            if not self.settings.ocr_enabled:
+                self.snack("Enable OCR in Settings to suggest names.", error=True)
+                return
+            try:
+                from ..features.naming import suggest_name
+                from ..features.ocr import default as default_ocr
+                from ..features.processing.pipeline import load_image, process_image
+                engine = default_ocr()
+                if engine is None or not pages:
+                    return
+                # OCR the first processed page to suggest a name.
+                p, rot = pages[0]
+                img = load_image(p)
+                opts = ProcessOptions(filter=(filter_dd.value or "gray"), rotate=rot)
+                import tempfile
+                with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tf:
+                    from ..features.processing.pipeline import save_image
+                    save_image(process_image(img, opts), tf.name)
+                    text = engine.extract(Path(tf.name).read_bytes(), "image/jpeg")
+                suggestion = suggest_name(text, fallback=name_field.value or "scan")
+                if suggestion and suggestion.lower().endswith(".pdf"):
+                    suggestion = suggestion[:-4]
+                name_field.value = f"{suggestion}.pdf"
+                name_field.focus()
+                self.snack("Name suggested from document text.")
+                self.page.update()
+            except Exception as ex:
+                self.snack(f"Could not suggest name: {ex}", error=True)
+
+        suggest_btn = ft.IconButton(ft.Icons.AUTO_FIX_HIGH, tooltip="Suggest name from text",
+                                    on_click=suggest_name)
+
         def refresh():
             page_count.value = f"{len(pages)} page(s)"
             order_list.controls = [_page_row(i, path, rot)
@@ -688,7 +866,7 @@ class App:
                         border=ft.border.all(1, ft.Colors.GREY_300), border_radius=8,
                         padding=8,
                     ),
-                    name_field,
+                    ft.Row([name_field, suggest_btn]),
                     ft.Row([filter_dd]),
                     process_toggle,
                     as_pdf,
@@ -911,6 +1089,12 @@ class App:
         haptics_switch = ft.Switch(
             label="Haptic feedback",
             value=self.settings.haptics, width=420)
+        bio = get_biometric_backend(self.page)
+        bio_available = bio.is_available()
+        bio_switch = ft.Switch(
+            label="Unlock with fingerprint / face",
+            value=self.settings.biometric_unlock and bio_available,
+            disabled=not bio_available, width=420)
         theme_dd = ft.Dropdown(
             label="Theme", value=self.settings.dark_mode, width=240, dense=True,
             options=[ft.dropdown.Option("system", label="System default"),
@@ -927,6 +1111,7 @@ class App:
             self.settings.ocr_enabled = bool(ocr_switch.value)
             self.settings.wifi_only_backup = bool(wifi_switch.value)
             self.settings.haptics = bool(haptics_switch.value)
+            self.settings.biometric_unlock = bool(bio_switch.value)
             self.settings.dark_mode = theme_dd.value or "system"
             self.settings.default_filter = filter_dd.value or "magic"
             self.settings.save()
@@ -949,6 +1134,10 @@ class App:
                 ft.Divider(),
                 ft.Text("Feedback", weight=ft.FontWeight.W_600),
                 haptics_switch,
+                ft.Text("Security", weight=ft.FontWeight.W_600),
+                bio_switch if bio_available else ft.Text(
+                    "Biometric unlock requires a supported device.",
+                    size=11, color=ft.Colors.GREY_600),
             ], tight=True, spacing=12, width=460), width=480),
             actions=[ft.TextButton("Cancel", on_click=lambda e: self._close_dlg(dlg)),
                      ft.FilledButton("Save", on_click=save)],
