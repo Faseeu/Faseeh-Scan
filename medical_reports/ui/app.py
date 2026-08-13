@@ -85,7 +85,9 @@ class App:
         self.page.overlay.append(self.file_picker)
         self.page.overlay.append(self.scan_picker)
         self.page.title = APP_NAME
-        self.page.theme = ft.Theme(color_scheme_seed=PRIMARY)
+        self.page.theme = ft.Theme(color_scheme_seed=PRIMARY, use_material3=True)
+        self.page.dark_theme = ft.Theme(color_scheme_seed=PRIMARY, use_material3=True)
+        self.page.theme_mode = self._theme_mode()
         self.page.bgcolor = BG
         self.page.padding = 0
         # Flet fires this after the Google OAuth redirect returns.
@@ -102,6 +104,26 @@ class App:
         try:
             from ..features.quick_actions import attach as attach_quick_actions
             attach_quick_actions(self.page, on_scan=self.start_scan)
+        except Exception:
+            pass
+
+    def _theme_mode(self):
+        return {
+            "light": ft.ThemeMode.LIGHT,
+            "dark": ft.ThemeMode.DARK,
+        }.get(self.settings.dark_mode, ft.ThemeMode.SYSTEM)
+
+    def _haptic(self, kind: str = "light"):
+        """Best-effort haptic feedback; never blocks UI."""
+        if not self.settings.haptics:
+            return
+        try:
+            if kind in ("success", "heavy"):
+                ft.HapticFeedback.heavy_impact()
+            elif kind == "medium":
+                ft.HapticFeedback.medium_impact()
+            else:
+                ft.HapticFeedback.light_impact()
         except Exception:
             pass
 
@@ -526,7 +548,7 @@ class App:
                 as_pdf=True,
                 ocr=self._ocr_enabled(),
             )
-            self.snack(f"Scanned and encrypted: {doc.name}")
+            self._haptic("success"); self.snack(f"Scanned and encrypted: {doc.name}")
             self._maybe_auto_backup()
             self.show_documents()
         except Exception as ex:
@@ -578,17 +600,9 @@ class App:
 
         def refresh():
             page_count.value = f"{len(pages)} page(s)"
-            # rebuild reorderable list
-            order_col.controls.clear()
-            for i, (path, rot) in enumerate(pages):
-                order_col.controls.append(_page_row(i, path, rot))
+            order_list.controls = [_page_row(i, path, rot)
+                                   for i, (path, rot) in enumerate(pages)]
             self.page.update()
-
-        def move(index, delta):
-            j = index + delta
-            if 0 <= j < len(pages):
-                pages[index], pages[j] = pages[j], pages[index]
-                refresh()
 
         def rotate_one(index):
             pages[index][1] = (pages[index][1] + 90) % 360
@@ -598,26 +612,40 @@ class App:
             del pages[index]
             refresh()
 
+        def on_reorder(e: ft.OnReorderEvent):
+            old, new = e.old_index, e.new_index
+            if new > old:
+                new -= 1
+            pages.insert(new, pages.pop(old))
+            refresh()
+
         def _page_row(i, path, rot):
-            return ft.Row([
-                ft.Text(str(i + 1), width=24, color=ft.Colors.GREY_700,
-                        weight=ft.FontWeight.W_600),
-                ft.Icon(ft.Icons.IMAGE, size=18, color=ft.Colors.GREY_500),
-                ft.Text(path.name, expand=True, max_lines=1,
-                        overflow=ft.TextOverflow.ELLIPSIS, size=13),
-                ft.Text(f"{rot}\u00b0", size=12, color=ft.Colors.GREY_600, width=34),
-                ft.IconButton(ft.Icons.ARROW_UPWARD, icon_size=18,
-                              tooltip="Move up", on_click=lambda e, idx=i: move(idx, -1)),
-                ft.IconButton(ft.Icons.ARROW_DOWNWARD, icon_size=18,
-                              tooltip="Move down", on_click=lambda e, idx=i: move(idx, 1)),
-                ft.IconButton(ft.Icons.ROTATE_RIGHT, icon_size=18,
-                              tooltip="Rotate page", on_click=lambda e, idx=i: rotate_one(idx)),
-                ft.IconButton(ft.Icons.DELETE_OUTLINE, icon_size=18,
-                              tooltip="Remove page", on_click=lambda e, idx=i: remove_one(idx)),
-            ], spacing=2)
+            return ft.Container(
+                key=f"scanpage_{i}",
+                content=ft.Row([
+                    ft.ReorderableDragHandle(ft.Icon(ft.Icons.DRAG_INDICATOR,
+                                                     size=20, color=ft.Colors.GREY_500)),
+                    ft.Text(str(i + 1), width=24, color=ft.Colors.GREY_700,
+                            weight=ft.FontWeight.W_600),
+                    ft.Icon(ft.Icons.IMAGE, size=18, color=ft.Colors.GREY_500),
+                    ft.Text(path.name, expand=True, max_lines=1,
+                            overflow=ft.TextOverflow.ELLIPSIS, size=13),
+                    ft.Text(f"{rot}\u00b0", size=12, color=ft.Colors.GREY_600, width=34),
+                    ft.IconButton(ft.Icons.ROTATE_RIGHT, icon_size=18,
+                                  tooltip="Rotate page",
+                                  on_click=lambda e, idx=i: rotate_one(idx)),
+                    ft.IconButton(ft.Icons.DELETE_OUTLINE, icon_size=18,
+                                  tooltip="Remove page",
+                                  on_click=lambda e, idx=i: remove_one(idx)),
+                ], spacing=2),
+            )
 
         page_count = ft.Text(f"{len(pages)} page(s)", color=ft.Colors.GREY_700)
-        order_col = ft.Column([], spacing=2)
+        order_list = ft.ReorderableListView(
+            controls=[_page_row(i, p, r) for i, (p, r) in enumerate(pages)],
+            on_reorder=on_reorder,
+            height=220, spacing=2,
+        )
 
         def save(_):
             if not pages:
@@ -656,7 +684,7 @@ class App:
                 ft.Column([
                     page_count,
                     ft.Container(
-                        order_col, height=220, width=520,
+                        order_list, height=220, width=540,
                         border=ft.border.all(1, ft.Colors.GREY_300), border_radius=8,
                         padding=8,
                     ),
@@ -703,7 +731,7 @@ class App:
                 source=source,
                 per_page_rotations=rotations,
             )
-            self.snack(f"Encrypted: {doc.name}")
+            self._haptic("success"); self.snack(f"Encrypted: {doc.name}")
             self._maybe_auto_backup()
         except Exception as ex:
             self.snack(f"Could not save scan: {ex}", error=True)
@@ -796,21 +824,7 @@ class App:
         rotations = {i: 0 for i in range(n)}
 
         def rebuild():
-            col.controls.clear()
-            for pos, idx in enumerate(order):
-                col.controls.append(ft.Row([
-                    ft.Text(f"{pos+1}.", width=30, color=ft.Colors.GREY_700),
-                    ft.Text(f"page {idx+1}", expand=True, size=13),
-                    ft.Text(f"{rotations[idx]}\u00b0", width=40, size=12, color=ft.Colors.GREY_600),
-                    ft.IconButton(ft.Icons.ARROW_UPWARD, icon_size=18,
-                                  on_click=lambda e, i=pos: move(i, -1)),
-                    ft.IconButton(ft.Icons.ARROW_DOWNWARD, icon_size=18,
-                                  on_click=lambda e, i=pos: move(i, 1)),
-                    ft.IconButton(ft.Icons.ROTATE_RIGHT, icon_size=18,
-                                  on_click=lambda e, i=idx: rotate(i)),
-                    ft.IconButton(ft.Icons.CLOSE, icon_size=18,
-                                  on_click=lambda e, i=idx: remove(i)),
-                ], spacing=2))
+            pdf_list.controls = [_pdf_row(pos, idx) for pos, idx in enumerate(order)]
             self.page.update()
 
         def move(pos, delta):
@@ -828,6 +842,30 @@ class App:
                 order.remove(idx)
             rebuild()
 
+        def on_reorder(e: ft.OnReorderEvent):
+            old, new = e.old_index, e.new_index
+            if new > old:
+                new -= 1
+            order.insert(new, order.pop(old))
+            rebuild()
+
+        def _pdf_row(pos, idx):
+            return ft.Container(
+                key=f"pdfpage_{pos}",
+                content=ft.Row([
+                    ft.ReorderableDragHandle(ft.Icon(ft.Icons.DRAG_INDICATOR,
+                                                     size=20, color=ft.Colors.GREY_500)),
+                    ft.Text(f"{pos+1}.", width=30, color=ft.Colors.GREY_700),
+                    ft.Text(f"page {idx+1}", expand=True, size=13),
+                    ft.Text(f"{rotations[idx]}\u00b0", width=40, size=12,
+                            color=ft.Colors.GREY_600),
+                    ft.IconButton(ft.Icons.ROTATE_RIGHT, icon_size=18,
+                                  on_click=lambda e, i=idx: rotate(i)),
+                    ft.IconButton(ft.Icons.CLOSE, icon_size=18,
+                                  on_click=lambda e, i=idx: remove(i)),
+                ], spacing=2),
+            )
+
         def apply(_):
             from ..features.pdf_tools import rearrange_pdf
             new_bytes = rearrange_pdf(data, order,
@@ -835,21 +873,25 @@ class App:
             self.docs.replace_blob(rid, new_bytes, content_type="application/pdf")
             dlg.open = False
             self.page.update()
-            self.snack("PDF updated.")
+            self._haptic("medium"); self.snack("PDF updated.")
             self._maybe_auto_backup()
             self.show_documents()
 
-        col = ft.Column([], spacing=2)
-        rebuild()
+        pdf_list = ft.ReorderableListView(
+            controls=[_pdf_row(p, i) for p, i in enumerate(order)],
+            on_reorder=on_reorder,
+            height=300, spacing=2,
+        )
         dlg = ft.AlertDialog(
             modal=True, title=ft.Text(f"Arrange — {meta.name}"),
             content=ft.Container(
                 ft.Column([
-                    ft.Text("Reorder, rotate, or remove pages.", size=12, color=ft.Colors.GREY_600),
-                    ft.Container(col, height=300, width=480,
+                    ft.Text("Drag to reorder; rotate or remove pages.",
+                            size=12, color=ft.Colors.GREY_600),
+                    ft.Container(pdf_list, height=300, width=500,
                                  border=ft.border.all(1, ft.Colors.GREY_300),
                                  border_radius=8, padding=8),
-                ], tight=True, spacing=10), width=520),
+                ], tight=True, spacing=10), width=540),
             actions=[
                 ft.TextButton("Cancel", on_click=lambda e: self._close_dlg(dlg)),
                 ft.FilledButton("Apply changes", on_click=apply),
@@ -866,6 +908,14 @@ class App:
         wifi_switch = ft.Switch(
             label="Auto-backup over Wi-Fi only",
             value=self.settings.wifi_only_backup, width=420)
+        haptics_switch = ft.Switch(
+            label="Haptic feedback",
+            value=self.settings.haptics, width=420)
+        theme_dd = ft.Dropdown(
+            label="Theme", value=self.settings.dark_mode, width=240, dense=True,
+            options=[ft.dropdown.Option("system", label="System default"),
+                     ft.dropdown.Option("light", label="Light"),
+                     ft.dropdown.Option("dark", label="Dark")])
         filter_dd = ft.Dropdown(
             label="Default scan look", value=self.settings.default_filter, width=240, dense=True,
             options=[ft.dropdown.Option(k, label=l) for k, l in [
@@ -876,8 +926,11 @@ class App:
         def save(_):
             self.settings.ocr_enabled = bool(ocr_switch.value)
             self.settings.wifi_only_backup = bool(wifi_switch.value)
+            self.settings.haptics = bool(haptics_switch.value)
+            self.settings.dark_mode = theme_dd.value or "system"
             self.settings.default_filter = filter_dd.value or "magic"
             self.settings.save()
+            self.page.theme_mode = self._theme_mode()
             dlg.open = False
             self.page.update()
             self.snack("Settings saved.")
@@ -886,14 +939,16 @@ class App:
         dlg = ft.AlertDialog(
             modal=True, title=ft.Text("Settings"),
             content=ft.Container(ft.Column([
+                ft.Text("Appearance", weight=ft.FontWeight.W_600),
+                theme_dd,
                 ft.Text("Scanning", weight=ft.FontWeight.W_600),
                 filter_dd, ocr_switch,
                 ft.Divider(),
                 ft.Text("Backup", weight=ft.FontWeight.W_600),
                 wifi_switch,
-                ft.Text("A backup runs automatically after you add or edit a "
-                        "document when a destination is available.",
-                        size=11, color=ft.Colors.GREY_600, width=440),
+                ft.Divider(),
+                ft.Text("Feedback", weight=ft.FontWeight.W_600),
+                haptics_switch,
             ], tight=True, spacing=12, width=460), width=480),
             actions=[ft.TextButton("Cancel", on_click=lambda e: self._close_dlg(dlg)),
                      ft.FilledButton("Save", on_click=save)],
@@ -1002,6 +1057,7 @@ class App:
         """Move to trash (soft delete), with an Undo snackbar."""
         meta = self.docs.get(rid)[0]
         self.docs.trash(rid)
+        self._haptic("light")
 
         def undo(_):
             self.docs.restore(rid)
@@ -1117,7 +1173,7 @@ class App:
         self.snack(f"Backing up to {be.display_name}…")
         try:
             n = be.backup_vault(self.vault)
-            self.snack(f"Backup complete — {n} encrypted file(s) in {be.display_name}.")
+            self._haptic("success"); self.snack(f"Backup complete — {n} encrypted file(s) in {be.display_name}.")
         except GDriveNotConfigured as e:
             self.snack(str(e), error=True)
         except Exception as e:

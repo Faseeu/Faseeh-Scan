@@ -32,6 +32,8 @@ class Settings:
     default_filter: str = "magic"
     wifi_only_backup: bool = True
     default_as_pdf: bool = True
+    dark_mode: str = "system"        # "system" | "light" | "dark"
+    haptics: bool = True
 
     @classmethod
     def load(cls, path: Path | None = None) -> "Settings":
