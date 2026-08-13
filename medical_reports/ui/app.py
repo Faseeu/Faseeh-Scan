@@ -1,10 +1,9 @@
 """
-Flet application — encrypted medical reports, backed up to the patient's
-own Google Drive.
+Faseeh Scan — Flet application.
 
-This is intentionally a thin shell over the core (crypto/vault/backends):
-the UI collects a password and some bytes, and the core does the security
-work. That keeps the trust-sensitive code small and testable.
+An encrypted document vault with a privacy-first scanner, backed up to the
+user's own Google Drive. The UI is a thin shell: it collects a password and
+some bytes, and the core/services do the security and feature work.
 
 Run (desktop):
     flet run main.py
@@ -23,7 +22,8 @@ import flet as ft
 from .. import APP_NAME, __version__
 from .. import crypto
 from ..config import settings
-from ..vault import Vault, ReportMeta
+from ..vault import Vault
+from ..services import VaultService, DocumentsService, BackupService
 from ..backends import LocalBackend, GoogleDriveBackend, GDriveNotConfigured
 from . import auth as google_auth
 
@@ -56,6 +56,9 @@ class App:
     def __init__(self, page: ft.Page):
         self.page = page
         self.vault = Vault(default_vault_dir())
+        self.vault_svc = VaultService(self.vault)
+        self.docs = DocumentsService(self.vault)
+        self.backup_svc = BackupService(self.vault)
         self.backend = None
         self.file_picker = ft.FilePicker(on_result=self.on_files_picked)
         self.page.overlay.append(self.file_picker)
@@ -71,12 +74,12 @@ class App:
     # ---- routing ---------------------------------------------------------
 
     def route(self):
-        if not self.vault.exists:
+        if not self.vault_svc.exists:
             self.show_welcome()
-        elif not self.vault.is_unlocked:
+        elif not self.vault_svc.is_unlocked:
             self.show_lock()
         else:
-            self.show_reports()
+            self.show_documents()
 
     def snack(self, msg: str, error: bool = False):
         self.page.snack_bar = ft.SnackBar(
@@ -97,9 +100,9 @@ class App:
             if pw.value != pw2.value:
                 return self.snack("Passwords don't match.", error=True)
             try:
-                self.vault.create(pw.value)
+                self.vault_svc.create(pw.value)
                 self.snack("Vault created.")
-                self.show_reports()
+                self.show_documents()
             except Exception as e:
                 self.snack(str(e), error=True)
 
@@ -112,7 +115,7 @@ class App:
                         ft.Icon(ft.Icons.HEALTH_AND_SAFETY, size=64, color=PRIMARY),
                         ft.Text(APP_NAME, size=28, weight=ft.FontWeight.BOLD),
                         ft.Text(
-                            "Your medical reports, encrypted on this device and backed up to "
+                            "Your documents, encrypted on this device and backed up to "
                             "your own Google Drive. No one — not even the app or Google — can "
                             "read them without your password.",
                             text_align=ft.TextAlign.CENTER, width=380, color=ft.Colors.GREY_700,
@@ -158,8 +161,8 @@ class App:
 
     def _do_unlock(self, pw):
         try:
-            self.vault.unlock(pw.value or "")
-            self.show_reports()
+            self.vault_svc.unlock(pw.value or "")
+            self.show_documents()
         except crypto.WrongPasswordError:
             self.snack("Incorrect password.", error=True)
         except Exception as e:
@@ -179,8 +182,8 @@ class App:
         except Exception as ex:
             self.snack(f"Signed in, but could not read profile: {ex}", error=True)
         # Re-render so the sidebar reflects the signed-in state.
-        if self.vault.is_unlocked:
-            self.show_reports()
+        if self.vault_svc.is_unlocked:
+            self.show_documents()
 
     def sign_in_google(self, _=None):
         if not google_auth.is_google_configured():
@@ -200,7 +203,7 @@ class App:
         # Flet clears the in-memory token; revoke at Google if desired later.
         self.page.auth = None
         self.snack("Signed out of Google.")
-        self.show_reports()
+        self.show_documents()
 
     def _google_email(self) -> str | None:
         return google_auth.signed_in_email(self.page)
@@ -211,14 +214,14 @@ class App:
         except Exception:
             return False
 
-    # ---- reports list ----------------------------------------------------
+    # ---- documents list ----------------------------------------------------
 
-    def show_reports(self):
+    def show_documents(self):
         self.page.views.clear()
         rail = self._build_sidebar()
-        body = ft.Container(self._build_reports_view(), expand=True, padding=24)
+        body = ft.Container(self._build_documents_view(), expand=True, padding=24)
         self.page.views.append(ft.View(
-            "/reports",
+            "/documents",
             [ft.Row([rail, ft.VerticalDivider(width=1), body], expand=True, spacing=0)],
             padding=0,
         ))
@@ -271,7 +274,7 @@ class App:
                 ft.Divider(height=1),
                 account_row,
                 ft.Divider(height=1),
-                nav(ft.Icons.FOLDER_SHARED, "Add report", lambda e: self.file_picker.pick_files(
+                nav(ft.Icons.FOLDER_SHARED, "Add document", lambda e: self.file_picker.pick_files(
                     allow_multiple=True,
                     allowed_extensions=["pdf", "jpg", "jpeg", "png", "doc", "docx", "txt", "webp"])),
                 nav(ft.Icons.CLOUD_UPLOAD, "Backup now", self.backup_now),
@@ -284,19 +287,19 @@ class App:
             width=250, bgcolor=ft.Colors.WHITE,
         )
 
-    def _build_reports_view(self):
-        reports = self.vault.list_reports()
-        title = ft.Text("Your reports", size=26, weight=ft.FontWeight.BOLD)
-        if not reports:
+    def _build_documents_view(self):
+        documents = self.docs.list()
+        title = ft.Text("Your documents", size=26, weight=ft.FontWeight.BOLD)
+        if not documents:
             content = ft.Column([
                 title,
                 ft.Container(
                     ft.Column([
                         ft.Icon(ft.Icons.DESCRIPTION_OUTLINED, size=64, color=ft.Colors.GREY_300),
-                        ft.Text("No reports yet", size=18, color=ft.Colors.GREY_600),
+                        ft.Text("No documents yet", size=18, color=ft.Colors.GREY_600),
                         ft.Text("Add a PDF, photo, or document — it's encrypted on this device.",
                                 color=ft.Colors.GREY_500),
-                        ft.FilledButton("Add first report", on_click=lambda e: self.file_picker.pick_files(
+                        ft.FilledButton("Add first document", on_click=lambda e: self.file_picker.pick_files(
                             allow_multiple=True,
                             allowed_extensions=["pdf", "jpg", "jpeg", "png", "doc", "docx", "txt", "webp"])),
                     ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=12),
@@ -304,14 +307,14 @@ class App:
                 ),
             ], expand=True)
         else:
-            rows = [self._report_card(r) for r in reports]
-            content = ft.Column([title, ft.Text(f"{len(reports)} report(s) stored locally",
+            rows = [self._document_card(r) for r in documents]
+            content = ft.Column([title, ft.Text(f"{len(documents)} document(s) stored locally",
                                                 color=ft.Colors.GREY_600),
                                  ft.ListView(rows, spacing=10, expand=True, padding=ft.padding.only(top=8))],
                                 expand=True)
         return content
 
-    def _report_card(self, r: ReportMeta):
+    def _document_card(self, r):
         icons = {
             "application/pdf": ft.Icons.PICTURE_AS_PDF,
             "image/jpeg": ft.Icons.IMAGE,
@@ -333,9 +336,9 @@ class App:
                                 size=12, color=ft.Colors.GREY_600),
                     ], spacing=4, expand=True),
                     ft.IconButton(ft.Icons.DOWNLOAD, tooltip="Decrypt & save",
-                                  on_click=lambda e, rid=r.id: self.save_report(rid)),
+                                  on_click=lambda e, rid=r.id: self.save_document(rid)),
                     ft.IconButton(ft.Icons.DELETE_OUTLINE, tooltip="Delete",
-                                  on_click=lambda e, rid=r.id: self.delete_report(rid)),
+                                  on_click=lambda e, rid=r.id: self.delete_document(rid)),
                 ], alignment=ft.MainAxisAlignment.START),
                 padding=14,
             ),
@@ -358,19 +361,19 @@ class App:
                     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                     ".txt": "text/plain", ".webp": "image/webp",
                 }.get(p.suffix.lower(), "application/octet-stream")
-                self.vault.add_report(data, f.name, content_type=ctype)
+                self.docs.add(data, f.name, content_type=ctype)
                 added += 1
             except Exception as ex:
                 self.snack(f"Failed to add {f.name}: {ex}", error=True)
-        self.snack(f"Encrypted and added {added} report(s).")
-        self.show_reports()
+        self.snack(f"Encrypted and added {added} document(s).")
+        self.show_documents()
 
-    def save_report(self, rid: str):
+    def save_document(self, rid: str):
         def pick(e: ft.FilePickerResultEvent):
             if not e.path:
                 return
             try:
-                meta, data = self.vault.get_report(rid)
+                meta, data = self.docs.get(rid)
                 Path(e.path).write_bytes(data)
                 self.snack(f"Decrypted and saved {meta.name}.")
             except Exception as ex:
@@ -379,18 +382,18 @@ class App:
         saver = ft.FilePicker(on_result=pick)
         self.page.overlay.append(saver)
         self.page.update()
-        meta = self.vault.list_reports()  # refresh
-        name = next((r.name for r in meta if r.id == rid), "report")
+        meta = self.docs.list()  # refresh
+        name = next((r.name for r in meta if r.id == rid), "document")
         saver.save_file(file_name=name)
 
-    def delete_report(self, rid: str):
+    def delete_document(self, rid: str):
         def confirm(_):
-            self.vault.delete_report(rid)
+            self.docs.delete(rid)
             dlg.open = False
             self.page.update()
-            self.show_reports()
+            self.show_documents()
         dlg = ft.AlertDialog(
-            title=ft.Text("Delete report?"),
+            title=ft.Text("Delete document?"),
             content=ft.Text("This removes the local encrypted copy. "
                             "Backed-up copies in Drive must be removed separately."),
             actions=[ft.TextButton("Cancel", on_click=lambda e: self._close_dlg(dlg)),
@@ -403,7 +406,7 @@ class App:
         self.page.update()
 
     def lock_vault(self):
-        self.vault.lock()
+        self.vault_svc.lock()
         self.show_lock()
 
     def change_password_dialog(self, _=None):
@@ -417,7 +420,7 @@ class App:
             if new.value != new2.value:
                 return self.snack("New passwords don't match.", error=True)
             try:
-                self.vault.change_password(old.value or "", new.value or "")
+                self.vault_svc.change_password(old.value or "", new.value or "")
                 dlg.open = False
                 self.page.update()
                 self.snack("Password changed. Run a backup to sync the new key file.")
@@ -467,7 +470,7 @@ class App:
         except Exception as e:
             self.snack(f"Backup failed: {e}", error=True)
         finally:
-            self.show_reports()
+            self.show_documents()
 
     def restore_now(self, _=None):
         try:
@@ -477,9 +480,9 @@ class App:
             return
         try:
             n = be.restore_vault(self.vault)
-            if self.vault.is_unlocked:
-                self.vault.lock()
-            self.snack(f"Restored {n} file(s). Unlock to view your reports.")
+            if self.vault_svc.is_unlocked:
+                self.vault_svc.lock()
+            self.snack(f"Restored {n} file(s). Unlock to view your documents.")
             self.show_lock()
         except Exception as e:
             self.snack(f"Restore failed: {e}", error=True)

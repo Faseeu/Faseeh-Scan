@@ -36,9 +36,13 @@ class StorageBackend(abc.ABC):
         for rel, abs_path in vault.iter_encrypted_files():
             self.upload(rel, abs_path)
             count += 1
-            if rel.startswith("data/"):
-                report_id = rel[len("data/") : -len(".mrbk")]
-                vault.mark_backed_up(report_id, self.id)
+            if rel.startswith("data/") and rel.endswith(".bin"):
+                document_id = rel[len("data/") : -len(".bin")]
+                try:
+                    vault.mark_backed_up(document_id, self.id)
+                except KeyError:
+                    # metadata may not yet include a just-written file
+                    pass
         return count
 
     def restore_vault(self, vault) -> int:

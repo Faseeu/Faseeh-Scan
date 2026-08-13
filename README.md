@@ -1,13 +1,15 @@
-# Medical Reports Backup
+# Faseeh Scan
 
-A patient-owned, end-to-end encrypted backup for medical reports — stored in
+An encrypted personal document vault with a privacy-first scanner. Scan or
+import any document — IDs, education papers, property files, receipts, and
+yes, medical reports too — it is encrypted on your device and backed up to
 **your own Google Drive**, readable only with **your password**.
 
-Patients often travel hundreds of kilometers carrying a single folder of paper
-reports. If that folder is lost, forgotten, or damaged, their medical history
-is gone. This app turns a phone into a secure backup: photograph or import a
-report, it is encrypted on-device, and the ciphertext is synced to the
-patient's own cloud. No central server ever sees plaintext.
+It started from a simple problem: patients traveling hundreds of kilometers
+with one folder of paper reports, losing everything if that folder was lost.
+The same problem applies to almost every important paper a person owns, so
+Faseeh Scan is a general vault, with great scanning at its heart. No central
+server ever sees plaintext.
 
 > **Zero-knowledge by design.** Files are encrypted with AES-256-GCM on the
 > device before they leave it. The password never leaves the device. Google
@@ -16,26 +18,25 @@ patient's own cloud. No central server ever sees plaintext.
 
 ---
 
-## MVP status
+## Current status
 
-This first version delivers the core that matters: **never lose a report**.
+Core is in place and tested; features are added through pluggable backends.
 
-- 🔐 Create an encrypted vault protected by a password (Argon2id + AES-256-GCM)
-- 📄 Add reports (PDF, images, documents) — encrypted instantly on disk
-- 🔓 Unlock / lock the vault; change password without re-encrypting files
-- 🗂️ List, open (decrypt to a file), and delete reports
-- ☁️ Back up the encrypted vault to the user's **own Google Drive** (`drive.file` scope)
-- 📱 **Google sign-in on desktop, web, and Android** through Flet's built-in OAuth (one code path, works in the APK)
-- 📂 Local-folder backend (works immediately, no credentials — good for USB/SD backup)
-- 📱 Cross-platform Python UI built with [Flet](https://flet.dev) — runs on desktop and builds to Android (`flet build apk`)
+- 🔐 Encrypted vault (Argon2id + AES-256-GCM, wrapped master key, tamper detection)
+- 📄 Add any document (PDF/images/files) — originals stored as-is, encrypted on disk
+- 🔓 Unlock/lock, change password without re-encrypting files
+- 🗂️ List, decrypt-to-file, delete; tags, notes, star; OCR/thumbnail sidecars
+- ☁️ Back up ciphertext to your **own Google Drive** (`drive.file` scope), or a local folder
+- 📱 **Google sign-in on desktop, web, and Android** via Flet's built-in OAuth
+- 🧩 **Pluggable architecture** for capture, processing, OCR, and storage — new backends
+  register themselves; missing optional packages simply aren't offered
+- 📷 Capture framework + OpenCV document processing (edge crop, perspective, filters,
+  PDF assembly); ML Kit native scanner wired as a drop-in Flet extension (Android)
+- 📱 Cross-platform Python UI built with [Flet](https://flet.dev) (`flet build apk`)
 
-See **[PLAN.md](PLAN.md)** for the full feature roadmap, threat model, and the
-open-source components chosen for scanning, OCR, search, and sharing. Android
-build/sign-in instructions are in **[docs/ANDROID_BUILD.md](docs/ANDROID_BUILD.md)**.
-
-OCR, auto-organization, and semantic search are intentionally **out of the MVP**
-and tracked in the plan as opt-in features — the app is useful the moment a
-report is encrypted and backed up.
+See **[ARCHITECTURE.md](ARCHITECTURE.md)** for the flexible-core design and build
+order, **[PLAN.md](PLAN.md)** for the broader roadmap, and
+**[docs/ANDROID_BUILD.md](docs/ANDROID_BUILD.md)** for Android signing/OAuth.
 
 ---
 
@@ -43,16 +44,20 @@ report is encrypted and backed up.
 
 ```
 medical_reports/
-├── crypto.py              # Argon2id KDF + AES-256-GCM; wrapped master-key vault
-├── vault.py               # Local encrypted store + metadata index
-├── backends/
-│   ├── base.py            # StorageBackend interface
-│   ├── local.py           # Local folder / USB backup
-│   └── gdrive.py          # Google Drive backup (optional)
-└── ui/
-    └── app.py             # Flet application (lock screen, reports, backup)
-main.py                    # Entry point: python main.py
-tests/test_core.py         # Core crypto/vault/backend tests
+├── crypto.py              # Argon2id + AES-256-GCM, wrapped master key
+├── vault.py               # Local encrypted store + metadata + artifacts
+├── services.py            # Thin orchestrators (vault/documents/backup)
+├── backends/              # Pluggable storage (local, Google Drive)
+├── features/
+│   ├── capture/           # Pluggable capture providers + service
+│   │   ├── base.py        # registry: filepicker (always), mlkit (Android)
+│   │   └── service.py     # capture -> process -> PDF -> encrypt
+│   ├── processing/        # OpenCV pipeline: crop, perspective, filters
+│   └── ocr/               # Pluggable OCR (RapidOCR/Tesseract), English only
+└── ui/app.py              # Flet application
+extensions/faseeh_scan_mlkit/  # Flet extension wrapping Google ML Kit scanner
+main.py
+tests/test_core.py
 ```
 
 ### How the encryption works
@@ -102,7 +107,7 @@ sign in with Google inside the app ("Sign in with Google" in the sidebar).
    client (Flet performs the token exchange server-side, even on mobile). Add
    the redirect URI `http://localhost/oauth_callback`.
 4. For Android, also create an **Android** OAuth client with package name
-   `com.faseeu.medicalreports` and your signing key's SHA-1.
+   `com.faseeh.scan` and your signing key's SHA-1.
 5. Put the **Web client's** id/secret in `.env` as `GOOGLE_CLIENT_ID` and
    `GOOGLE_CLIENT_SECRET`.
 

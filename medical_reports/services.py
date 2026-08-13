@@ -1,0 +1,151 @@
+"""
+Thin service layer that orchestrates core + pluggable features.
+
+The UI talks to services; services talk to the vault, backends, and feature
+registries. This keeps UI code simple and means new features register
+themselves without editing call sites.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Optional
+
+from .vault import Vault, DocumentMeta
+
+
+class VaultService:
+    """Create/unlock/lock/password for a vault."""
+
+    def __init__(self, vault: Vault):
+        self.vault = vault
+
+    @property
+    def exists(self) -> bool:
+        return self.vault.exists
+
+    @property
+    def is_unlocked(self) -> bool:
+        return self.vault.is_unlocked
+
+    def create(self, password: str) -> None:
+        self.vault.create(password)
+
+    def unlock(self, password: str) -> None:
+        self.vault.unlock(password)
+
+    def lock(self) -> None:
+        self.vault.lock()
+
+    def change_password(self, old: str, new: str) -> None:
+        self.vault.change_password(old, new)
+
+
+class DocumentsService:
+    """Add/list/get/delete/tag/star documents and attach artifacts."""
+
+    def __init__(self, vault: Vault):
+        self.vault = vault
+
+    def add(self, data: bytes, name: str, content_type: str = "application/octet-stream",
+            *, source: str = "import", tags: list[str] | None = None,
+            note: str = "") -> DocumentMeta:
+        return self.vault.add_document(
+            data, name, content_type, source=source, tags=tags or [], note=note
+        )
+
+    def list(self) -> list[DocumentMeta]:
+        return self.vault.list_documents()
+
+    def get(self, doc_id: str) -> tuple[DocumentMeta, bytes]:
+        return self.vault.get_document(doc_id)
+
+    def delete(self, doc_id: str) -> None:
+        self.vault.delete_document(doc_id)
+
+    def rename(self, doc_id: str, name: str) -> DocumentMeta:
+        m = self.vault.get_meta(doc_id)
+        m.name = name
+        self.vault.update_meta(m)
+        return m
+
+    def set_starred(self, doc_id: str, starred: bool) -> DocumentMeta:
+        m = self.vault.get_meta(doc_id)
+        m.starred = starred
+        self.vault.update_meta(m)
+        return m
+
+    def set_tags(self, doc_id: str, tags: list[str]) -> DocumentMeta:
+        m = self.vault.get_meta(doc_id)
+        m.tags = tags
+        self.vault.update_meta(m)
+        return m
+
+    def set_note(self, doc_id: str, note: str) -> DocumentMeta:
+        m = self.vault.get_meta(doc_id)
+        m.note = note
+        self.vault.update_meta(m)
+        return m
+
+    def put_artifact(self, doc_id: str, key: str, data: bytes,
+                     content_type: str = "application/octet-stream") -> None:
+        self.vault.put_artifact(doc_id, key, data, content_type)
+
+    def get_artifact(self, doc_id: str, key: str) -> bytes:
+        return self.vault.get_artifact(doc_id, key)
+
+    def has_artifact(self, doc_id: str, key: str) -> bool:
+        return self.vault.has_artifact(doc_id, key)
+
+    def search(self, query: str) -> list[DocumentMeta]:
+        """Simple filename/note/tag search. OCR text is searched when an
+        'ocr' artifact exists; semantic search is a later pluggable engine."""
+        q = (query or "").lower().strip()
+        if not q:
+            return self.list()
+        out: list[DocumentMeta] = []
+        for d in self.list():
+            haystack = " ".join([d.name, d.note, " ".join(d.tags)]).lower()
+            if q in haystack:
+                out.append(d)
+                continue
+            if self.has_artifact(d.id, "ocr"):
+                try:
+                    text = self.get_artifact(d.id, "ocr").decode("utf-8", "ignore").lower()
+                    if q in text:
+                        out.append(d)
+                except Exception:
+                    pass
+        return out
+
+
+class BackupService:
+    """Choose a storage backend and run backup/restore."""
+
+    def __init__(self, vault: Vault):
+        self.vault = vault
+        self._backend = None
+
+    def use(self, backend) -> None:
+        self._backend = backend
+
+    @property
+    def backend(self):
+        return self._backend
+
+    def backup(self) -> int:
+        if self._backend is None:
+            raise RuntimeError("No storage backend selected.")
+        return self._backend.backup_vault(self.vault)
+
+    def restore(self) -> int:
+        if self._backend is None:
+            raise RuntimeError("No storage backend selected.")
+        return self._backend.restore_vault(self.vault)
+
+    def pending_count(self) -> int:
+        """Documents not yet backed up to the current backend."""
+        if self._backend is None:
+            return 0
+        bid = self._backend.id
+        return sum(1 for d in self.vault.list_documents() if bid not in d.backed_up_to)
