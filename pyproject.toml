@@ -1,0 +1,53 @@
+[project]
+name = "medical-reports-backup"
+version = "0.1.0"
+description = "Client-side encrypted medical reports, backed up to the patient's own Google Drive."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Faseeu" }]
+dependencies = [
+    "flet>=0.86,<0.87",
+    "cryptography>=42.0",
+    "argon2-cffi>=23.1",
+]
+
+[project.optional-dependencies]
+gdrive = [
+    "google-auth>=2.27",
+    "google-auth-oauthlib>=1.2",
+    "google-api-python-client>=2.120",
+]
+
+[tool.flet]
+org = "com.faseeu.medicalreports"
+product = "Medical Reports Backup"
+company = "Medical Reports Backup"
+
+# Cross-platform permissions used by the app (camera capture will be added in
+# Phase 2; internet is required for Google Drive sync/OAuth).
+[tool.flet.permissions]
+camera = "none"          # set to "usage" when Phase 2 scanning lands
+photo_library = "usage"
+microphone = "none"
+location = "none"
+
+[tool.flet.android]
+# Internet permission is required for Google Drive API + OAuth.
+permissions = [
+    "android.permission.INTERNET",
+    "android.permission.ACCESS_NETWORK_STATE",
+    # Camera + storage permissions will be enabled in Phase 2 (document scan).
+    # "android.permission.CAMERA",
+    # "android.permission.READ_MEDIA_IMAGES",
+]
+
+[tool.flet.android.deep_linking]
+scheme = "flet"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["medical_reports*"]

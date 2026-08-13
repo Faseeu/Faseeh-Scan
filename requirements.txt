@@ -1,0 +1,11 @@
+# Core UI
+flet>=0.86,<0.87
+
+# Crypto
+cryptography>=42.0
+argon2-cffi>=23.1
+
+# Google Drive backup (optional — only needed if you enable the Drive backend)
+google-auth>=2.27
+google-auth-oauthlib>=1.2
+google-api-python-client>=2.120
