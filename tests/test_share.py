@@ -5,9 +5,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from medical_reports.vault import Vault
-from medical_reports.services import DocumentsService
-from medical_reports.features.share_intent import ShareIntentService, mime_to_content_type
+from faseeh_scan.vault import Vault
+from faseeh_scan.services import DocumentsService
+from faseeh_scan.features.share_intent import ShareIntentService, mime_to_content_type
 
 
 def test_callback_and_drain():

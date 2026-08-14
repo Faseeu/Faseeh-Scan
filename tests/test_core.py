@@ -5,12 +5,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from medical_reports import crypto
-from medical_reports.vault import Vault
-from medical_reports.services import DocumentsService, BackupService
-from medical_reports.backends.local import LocalBackend
-from medical_reports.features import capture as capture_mod
-from medical_reports.features.processing import SUPPORTED as PROC_SUPPORTED
+from faseeh_scan import crypto
+from faseeh_scan.vault import Vault
+from faseeh_scan.services import DocumentsService, BackupService
+from faseeh_scan.backends.local import LocalBackend
+from faseeh_scan.features import capture as capture_mod
+from faseeh_scan.features.processing import SUPPORTED as PROC_SUPPORTED
 
 
 def test_report_roundtrip():
@@ -134,7 +134,7 @@ def test_capture_registry_and_filepicker():
     assert capture_mod.default().id in ("filepicker", "mlkit")
 
     # filepicker capture via opener callback
-    from medical_reports.features.capture.filepicker import FilePickerCapture
+    from faseeh_scan.features.capture.filepicker import FilePickerCapture
     fp = FilePickerCapture(opener=lambda multi: [])
     assert fp.is_available()
     res = fp.capture()
@@ -146,7 +146,7 @@ def test_processing_pipeline_available():
     # OpenCV is installed in the test env; confirm the pipeline at least loads.
     assert PROC_SUPPORTED, "opencv should be installed in test env"
     import numpy as np
-    from medical_reports.features.processing import pipeline as P
+    from faseeh_scan.features.processing import pipeline as P
     # A white "page" on a dark background.
     img = np.zeros((800, 600, 3), dtype=np.uint8)
     img[100:700, 80:520] = 245

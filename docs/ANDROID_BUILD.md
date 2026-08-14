@@ -93,7 +93,7 @@ The redirect URL is handled automatically:
 
 ## 5. Bundling config / avoiding secrets in the APK
 
-`medical_reports/config.py` reads `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`
+`faseeh_scan/config.py` reads `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`
 from environment variables, falling back to a local `.env`.
 
 For release builds, set them in the build environment instead of committing

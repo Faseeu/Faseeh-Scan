@@ -4,7 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from medical_reports.features.naming import suggest_name  # type: ignore  # noqa
+from faseeh_scan.features.naming import suggest_name  # type: ignore  # noqa
 
 
 def test_date_and_title():

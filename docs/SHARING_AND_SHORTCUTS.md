@@ -12,7 +12,7 @@ Implementation:
   `[tool.flet.flutter.pubspec.dependencies]` in `pyproject.toml`.
 - `extensions/faseeh_share` is a Flet extension wrapping it and forwarding
   payloads to Python as page events (`faseeh_share_receive`).
-- `medical_reports/features/share_intent.py` provides `ShareIntentService`,
+- `faseeh_scan/features/share_intent.py` provides `ShareIntentService`,
   which the UI subscribes to.
 - The app must declare Android intent filters for `ACTION_SEND` and
   `ACTION_SEND_MULTIPLE` with `mimeType */*`. Because Flet's pyproject does

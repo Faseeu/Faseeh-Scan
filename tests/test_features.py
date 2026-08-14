@@ -8,11 +8,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import numpy as np
 import cv2
 
-from medical_reports.vault import Vault
-from medical_reports.services import DocumentsService
-from medical_reports.settings import Settings
-from medical_reports.features.thumbnails import make_thumbnail
-from medical_reports.features.ocr import available as ocr_available
+from faseeh_scan.vault import Vault
+from faseeh_scan.services import DocumentsService
+from faseeh_scan.settings import Settings
+from faseeh_scan.features.thumbnails import make_thumbnail
+from faseeh_scan.features.ocr import available as ocr_available
 
 
 def _text_image(path: Path, text="Hemoglobin 13.5 g/dL Date 2026"):

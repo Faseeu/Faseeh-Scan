@@ -6,9 +6,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from medical_reports.vault import Vault
-from medical_reports.services import DocumentsService, BackupService
-from medical_reports.backends.local import LocalBackend
+from faseeh_scan.vault import Vault
+from faseeh_scan.services import DocumentsService, BackupService
+from faseeh_scan.backends.local import LocalBackend
 
 
 def test_version_history_restore():

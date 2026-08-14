@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Callable
 if TYPE_CHECKING:
     from flet.core.page import Page
 
-from medical_reports.features.share_intent import (  # noqa: F401
+from faseeh_scan.features.share_intent import (  # noqa: F401
     IncomingFile, ShareIntentService, mime_to_content_type,
 )
 

@@ -5,9 +5,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from medical_reports.vault import Vault
-from medical_reports.services import DocumentsService
-from medical_reports.features.pdf_tools import (
+from faseeh_scan.vault import Vault
+from faseeh_scan.services import DocumentsService
+from faseeh_scan.features.pdf_tools import (
     images_to_pdf_bytes, rearrange_pdf, delete_pages, rotate_pages,
     merge_pdfs, page_count,
 )

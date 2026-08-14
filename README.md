@@ -43,7 +43,7 @@ order, **[PLAN.md](PLAN.md)** for the broader roadmap, and
 ## Project structure
 
 ```
-medical_reports/
+faseeh_scan/
 ├── crypto.py              # Argon2id + AES-256-GCM, wrapped master key
 ├── vault.py               # Local encrypted store + metadata + artifacts
 ├── services.py            # Thin orchestrators (vault/documents/backup)

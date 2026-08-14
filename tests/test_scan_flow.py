@@ -8,10 +8,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import numpy as np
 import cv2
 
-from medical_reports.vault import Vault
-from medical_reports.services import DocumentsService
-from medical_reports.features.capture import CaptureService, CaptureResult, CapturedPage
-from medical_reports.features.processing import ProcessOptions
+from faseeh_scan.vault import Vault
+from faseeh_scan.services import DocumentsService
+from faseeh_scan.features.capture import CaptureService, CaptureResult, CapturedPage
+from faseeh_scan.features.processing import ProcessOptions
 
 
 def _make_page(path: Path):
@@ -107,7 +107,7 @@ def test_per_page_rotation_and_order():
             process=False, as_pdf=True, ocr=False, source="import",
             per_page_rotations=[0, 0, 90],
         )
-        from medical_reports.features.pdf_tools import page_count
+        from faseeh_scan.features.pdf_tools import page_count
         _, data = docs.get(doc.id)
         assert page_count(data) == 3
         print("OK per-page order + rotation applied")
