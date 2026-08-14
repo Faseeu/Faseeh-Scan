@@ -1,0 +1,79 @@
+[project]
+name = "faseeh-scan"
+version = "0.2.0"
+description = "Encrypted document vault with a privacy-first scanner, backed up to your own Google Drive."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Faseeu" }]
+dependencies = [
+    "flet>=0.86,<0.87",
+    "cryptography>=42.0",
+    "argon2-cffi>=23.1",
+]
+
+[project.optional-dependencies]
+# Cross-platform document scanning / image processing
+scan = [
+    "opencv-python-headless>=4.9",
+    "numpy>=1.26",
+    "Pillow>=10.0",
+    "img2pdf>=0.5",
+]
+# On-device OCR (English)
+ocr = [
+    "rapidocr-onnxruntime>=1.3",
+]
+# PDF thumbnails / rendering
+thumb = [
+    "pypdfium2>=4.20",
+]
+# PDF manipulation
+pdf = [
+    "pypdf>=4.0",
+]
+# Google Drive backup
+gdrive = [
+    "google-auth>=2.27",
+    "google-auth-oauthlib>=1.2",
+    "google-api-python-client>=2.120",
+]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.flet]
+org = "com.faseeh.scan"
+product = "Faseeh Scan"
+company = "Faseeh Scan"
+
+# Cross-platform permissions. Camera is enabled for scanning on mobile.
+[tool.flet.permissions]
+camera = "usage"
+photo_library = "usage"
+microphone = "none"
+location = "none"
+
+[tool.flet.android]
+permissions = [
+    "android.permission.INTERNET",
+    "android.permission.ACCESS_NETWORK_STATE",
+    "android.permission.CAMERA",
+    "android.permission.READ_MEDIA_IMAGES",
+]
+deep_linking = { scheme = "faseehscan" }
+
+# Flutter plugins required by the Faseeh Scan Flet extensions (mobile).
+# These are only pulled into native builds; desktop/web runs without them.
+# Uncomment google_mlkit_document_scanner when the ML Kit extension is enabled.
+[tool.flet.flutter.pubspec.dependencies]
+receive_sharing_intent = { version = "^1.9.0" }
+quick_actions = { version = "^1.0.7" }
+# google_mlkit_document_scanner = { version = "^0.5.0" }
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["faseeh_scan*"]

@@ -1,0 +1,23 @@
+name: faseeh_local_auth
+description: Faseeh Scan Flet extension for biometric unlock via local_auth.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+  flutter: ">=3.16.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flet: ^0.86.0
+  local_auth: ^2.3.0
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: com.faseeh.scan.localauth
+        pluginClass: FaseehLocalAuthPlugin
+      ios:
+        pluginClass: FaseehLocalAuthPlugin

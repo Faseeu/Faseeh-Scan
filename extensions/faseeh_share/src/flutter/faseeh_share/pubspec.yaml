@@ -1,0 +1,23 @@
+name: faseeh_share
+description: Faseeh Scan Flet extension to receive shared files/text via receive_sharing_intent.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+  flutter: ">=3.16.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flet: ^0.86.0
+  receive_sharing_intent: ^1.9.0
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: com.faseeh.scan.share
+        pluginClass: FaseehSharePlugin
+      ios:
+        pluginClass: FaseehSharePlugin

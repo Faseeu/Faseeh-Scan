@@ -1,0 +1,16 @@
+[project]
+name = "faseeh-share"
+version = "0.1.0"
+description = "Faseeh Scan Flet extension: receive shared files/text from other apps on Android/iOS."
+requires-python = ">=3.10"
+dependencies = ["flet>=0.86"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["faseeh_share"]
+
+[tool.flet.extension]
+flutter_path = "src/flutter/faseeh_share"
